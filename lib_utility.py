@@ -3,12 +3,12 @@ import functools
 import json
 # import pickle
 import timeit
-from itertools import repeat
+from itertools import pairwise, repeat
 from pathlib import Path
 from tkinter import filedialog
 import numpy as np
 # from numba import njit
-from numpy import exp, array, nanmean, std, arange, ones, sign, flipud, stack, trapz, where, zeros, mean, median, \
+from numpy import diff, exp, array, nanmean, std, arange, ones, sign, flipud, stack, trapz, where, zeros, mean, median, \
     percentile, \
     delete, \
     savetxt, gradient, concatenate, ndarray, dtype, signedinteger
@@ -78,7 +78,7 @@ def conv_vector(n_p: int, c_type: str = 'g', sharpness: int = 2) -> NDArray[np.f
         sd: np.floating = std(arange(n_p / sharpness))
         x = arange(n_p)
         conv = exp(-(((x - n_p / 2) / sd) ** 2) / 2) / (sd * np.sqrt(2 * np.pi))
-        if np.abs(1 - np.sum(conv)) >= max_diff:  # TODO assess if it's necessary to use numpy versions
+        if np.abs(1 - np.sum(conv)) >= max_diff:
             print(f"{n_p = }")
             print(f"{sharpness = }")
             print(f"{sd = }")
@@ -276,13 +276,13 @@ def make_sections(
 def apply_by_continuous(
         function: callable,
         arr: NDArray[NDArray[np.floating]],
-        increment: int | float = 60
+        increment: dict,
         ) -> NDArray[NDArray[np.floating]]:
     """Calculates the average value for a certain increment in time.
     If no values are found in that increment then the value is 0.0"""
     local_vtp = vtp
-    d_t = round(float(arr[0][1] - arr[0][0]), 5)  # TODO find a better way to enter the minimal interval
-    half_range = int(local_vtp(increment, d_t) / 2)
+    d_t = round(float(arr[0][1] - arr[0][0]), 5)
+    half_range = int(local_vtp(increment["increment"], d_t) / 2)
     return np.array(
             [
                     [
@@ -294,7 +294,7 @@ def apply_by_continuous(
                                     ]
                                     )
                             ]
-                    for p_time in arange(arr[0][0] + (increment / 2), arr[0][-1], increment)
+                    for p_time in arange(arr[0][0] + (increment["increment"] / 2), arr[0][-1], increment["increment"])
                     ]
             ).T
 
@@ -303,22 +303,19 @@ def apply_by_continuous(
 def apply_by_discrete(
         function: callable,
         arr: NDArray[NDArray[np.floating]],
-        increment: int | float = 60,
+        increment: dict,
         ) -> NDArray[NDArray[np.floating]]:
     """Calculates the average value for a certain increment in time.
     If no values are found in that increment then the value is 0.0"""
     l_function: list[list[float]] = []
-    prev_time: float = 0.0
-    for pres_time in arange(increment / 2, arr[0][-1] + increment, increment):
-        section = where((prev_time <= arr[0]) & (arr[0] < (pres_time + increment / 2)))
-        if prev_time > arr[0][-1]:
-            print(f"        End of the array!!")
-            break
-        elif len(arr[0][section]):
+    interv: NDArray[NDArray[np.floating]] = intervals(arr, increment).astype(np.float32)
+    for pair in pairwise(interv):
+        pres_time = sum(pair) / 2
+        section = where((pair[0] <= arr[0]) & (arr[0] < pair[1]))
+        if len(arr[0][section]):
             l_function.append([pres_time, function(arr[1][section])])
         else:
             l_function.append([pres_time, 0.0])
-        prev_time = pres_time + increment / 2
 
     return array(l_function).T
 
@@ -327,7 +324,7 @@ def apply_by_discrete(
 def apply_by(
         function: callable,
         arr: NDArray[NDArray[np.floating]],
-        increment: int | float = 60,
+        increment: dict,
         continuous: bool = False
         ) -> NDArray[NDArray[np.floating]]:
     """Calculates the average value for a certain increment in time.
@@ -340,7 +337,9 @@ def apply_by(
 
 @timing
 def average_by(
-        arr: NDArray[NDArray[np.floating]], increment: int = 60, continuous: bool = False
+        arr: NDArray[NDArray[np.floating]],
+        increment: dict,
+        continuous: bool = False
         ) -> NDArray[NDArray[np.floating]]:
     """Calculates the average value for a certain increment in time.
     If no values are found in that increment then the average value is 0.0"""
@@ -354,7 +353,9 @@ def count_ones(arr: NDArray[np.floating]) -> int:
 
 @timing
 def event_count(
-        arr: NDArray[NDArray[np.floating]], increment: int = 60, continuous: bool = False
+        arr: NDArray[NDArray[np.floating]],
+        increment: dict,
+        continuous: bool = False
         ) -> NDArray[NDArray[np.floating]]:
     """Counts the number of events in a certain increment in time.
     If no values are found in that increment then the count is set as 0.0"""
@@ -362,7 +363,7 @@ def event_count(
 
 
 @timing
-def event_pr(arr: NDArray[NDArray[np.floating]], increment: int = 60) -> NDArray[NDArray[np.floating]]:
+def event_pr(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDArray[np.floating]]:
     """Calculates the probability of an event for a certain increment in time.
     If no values are found in that increment then the probability is set as 0.0"""
     # Float conversion for effective normalization
@@ -371,18 +372,44 @@ def event_pr(arr: NDArray[NDArray[np.floating]], increment: int = 60) -> NDArray
     return counts
 
 
+def intervals(
+        arr: NDArray[NDArray[np.floating]], increment: dict, exact=False,
+        ) -> NDArray[NDArray[np.floating]]:
+    if exact:
+        return apply_by(lambda x: x[-1] - x[0], np.array([arr[0], arr[0]]), increment, False)[1]
+    else:
+        ratio = increment["end"] / increment["increment"]
+        n_times = round(ratio, 0)
+        if n_times - ratio >= 0:
+            tail = n_times
+        else:
+            tail = n_times + 1
+        arr = [p_time for p_time in arange(0, tail * increment["increment"] + 1, increment["increment"])]
+        arr[0] = increment["start"]
+        arr[-1] = increment["end"]
+        return np.array(arr)
+
+
 @timing
-def event_fr(arr: NDArray[NDArray[np.floating]], increment: int = 60) -> NDArray[NDArray[np.floating]]:
+def event_fr(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDArray[np.floating]]:
     """Calculates the frequency of an event for a certain increment in time.
     If no values are found in that increment then the frequency is set as 0.0"""
     # Float conversion for effective normalization
     counts: NDArray[NDArray[np.floating]] = event_count(arr, increment).astype(np.float32)
-    counts[1] = counts[1] / increment  # Normalization of the values
+    interv: NDArray[NDArray[np.floating]] = intervals(arr, increment).astype(np.float32)
+    print(f"{interv = }")
+    interv = diff(interv)
+    print(f"diff{interv = }")
+    print(f"{increment = }")
+    print(f"{counts = }")
+    print(f"{increment["increment"]/interv = }")
+    counts[1] = counts[1]/interv
+    print(f"{counts = }")
     return counts
 
 
 @timing
-def event_aft(arr: NDArray[NDArray[np.floating]], increment: int = 60) -> NDArray[NDArray[np.floating]]:
+def event_aft(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDArray[np.floating]]:
     """Counts the number of events for a certain increment in time, and divides by the average of the events values.
     If no values are found in that increment then the count is set as 0.0"""
     # Float conversion for effective normalization
@@ -398,10 +425,12 @@ def event_aft(arr: NDArray[NDArray[np.floating]], increment: int = 60) -> NDArra
 
 
 @timing
-def save_plot(values, name_params: dict, units: str, averaging: int, bins: int, func: callable, plot=True) -> None:
+def save_plot(
+        values, name_params: dict, units: str, plot_increment: dict, bins: int, func: callable, plot=True
+        ) -> None:
     """Saves the data and plots it."""
     if callable(func):
-        func_values = func(values, averaging)
+        func_values = func(values, plot_increment)
         print(f"{values.shape=}")
         print(f"{values=}")
         func_name = func.__name__

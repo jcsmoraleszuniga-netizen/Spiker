@@ -48,7 +48,7 @@ def main(ori_inst: EvtPro, start: int = 0, total: int = 1800, interval: int = 60
     )
     print(f"{out_name_ds = }")
 
-    rec = cp_copy(ori_inst)  # TODO find a better way to do this
+    rec = cp_copy(ori_inst)
     rec.clean()
     for section in make_sections(start, total, interval):
         rec + body(ori_inst, section)

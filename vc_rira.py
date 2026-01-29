@@ -91,7 +91,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
     total_acc_res = np.array([[0, 0]])  # default values for axis match
     for section in make_sections(start, total, interval):
         # body function perform the analysis!!!!!!!
-        rec = body(ori_inst, section)  # TODO use the new form with '+' operator instead of append
+        rec = body(ori_inst, section)
         input_res = rec.inp_res
         acc_res = rec.acc_res
 
@@ -101,7 +101,6 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
 
         ############################### Testing
         if const["I_vs_V"]:
-            # TODO make a method called show_all_ivs
             accept_voltage = True
             common_voltage = np.ndarray[[]]
             # sample_currents = []

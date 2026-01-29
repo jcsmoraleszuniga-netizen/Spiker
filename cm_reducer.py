@@ -31,7 +31,7 @@ def body(ori_inst: EvtPro, section: tuple[int, int]) -> EvtPro:
     if const["smoothing"] and const["down_sample"] > 1:
         # Smoothing process
         print(f"{rec.t_delta = }")
-        rec.get_smooth(rec.t_delta * const["down_sample"], const["repetitions"], const["sharpness"])  # TODO fix this
+        rec.get_smooth(rec.t_delta * const["down_sample"], const["repetitions"], const["sharpness"])
 
     rec.down_sample(const["down_sample"])
     print(f"{len(rec.resp) = }")
@@ -60,7 +60,7 @@ def main(ori_inst, start=0, total=1800, interval=600):
     )
     print(f"{out_name_ds = }")
 
-    rec = cp_copy(ori_inst)  # TODO find a better way to do this
+    rec = cp_copy(ori_inst)
     rec.clean()
     for section in make_sections(start, total, interval):
         rec + body(ori_inst, section)

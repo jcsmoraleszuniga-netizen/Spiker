@@ -56,7 +56,7 @@ def show_plot(original, title="No Title.", values=(0.0, 0.0)):
     match original.mode:
         case "continuous":
             plt.plot(original.time, original.resp, linewidth=0.5)
-            plt.plot(original.time, original.cdac, "r")  # TODO fix this in case of difference in length
+            plt.plot(original.time, original.cdac, "r")
         case "sweeps":
             for resp in reversed(original.sweeps):
                 plt.plot(original.time, resp, linewidth=0.5)

@@ -64,16 +64,17 @@ def main(ori_inst: EvtPro, start: int = 0, total: int = 1800, interval: int = 60
         ori_inst.get_fft(const['option'])
         ori_inst.fft_plot("Original")
 
-    rec = cp_copy(ori_inst)  # TODO find a better way to do this
+    rec = cp_copy(ori_inst)
     rec.clean()
     for section in make_sections(start, total, interval):
         rec + body(ori_inst, section)
 
     last_pos = len(rec.time)
+    increment = {"start": start, "end": total, "increment": 0.05}
     std_resp = apply_by(
             np.std,
             np.array([rec.time, rec.resp - ori_inst.resp[:last_pos]]),
-            0.05,
+            increment,
             True
             )
 

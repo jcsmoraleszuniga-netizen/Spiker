@@ -24,7 +24,7 @@ const: dict[str, Any] = dict(
         peak_to_peak=0.002,  # Interval between two consecutive peaks
         shift_time=0.001,  # seconds to find a pulse's artifact
         zero_peak_to_amp_peak=0.005,  # seconds between the amplitude peak and the derivative calculated peak
-        max_rise_time = 0.00263,  # max time delta allowed for the events
+        max_rise_time=0.00263,  # max time delta allowed for the events
 
         baseline_time=0.002,  # seconds
         peak_radius=0.0002,  # seconds
@@ -201,7 +201,6 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
     const_file = file_parent + make_name(common_name + ["const"], ".json")
     const.update(manage_settings(const_file, const))
     common_name += [const["event_type"], const["alignment"]]
-    # TODO implement a testing mechanism for these values
     # "t_bef" must be at least the size of "zero_pass_frame"
     if const["zero_pass_frame"] > const["t_bef"]:
         print(f"Changing {const["t_bef"] = }, because is smaller than {const["zero_pass_frame"] = }")
@@ -218,49 +217,49 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
         zero_arr = np.array([[0, 0]])
         # For single events
         events_analyses = {
-                "Amplitude"           : {
+                "Amplitude"                    : {
                         "value"    : zero_arr,
                         "parameter": "amplitude",
                         "units"    : const["units"],
                         "function" : average_by
                         },
-                "AUC"                 : {
+                "AUC"                          : {
                         "value"    : zero_arr,
                         "parameter": "r_auc",
                         "units"    : const["units"] + "*s",
                         "function" : average_by
                         },
-                "Average Frequency"   : {
+                "Average Frequency"            : {
                         "value"    : zero_arr,
                         "parameter": "r_auc",
                         "units"    : "Hz",
                         "function" : event_fr
                         },
-                "Rise-slope value"    : {
+                "Rise-slope value"             : {
                         "value"    : zero_arr,
                         "parameter": "rise_slope_val",
                         "units"    : const["units"] + "/s",
                         "function" : average_by
                         },
-                "Max slope to peak"       : {
+                "Max slope to peak"            : {
                         "value"    : zero_arr,
                         "parameter": "slope_peak_delta",
                         "units"    : "s",
                         "function" : average_by
                         },
-                "Event baseline value": {
+                "Event baseline value"         : {
                         "value"    : zero_arr,
                         "parameter": "b_amp",
                         "units"    : const["units"],
                         "function" : average_by
                         },
-                "Peak position error": {
+                "Peak position error"          : {
                         "value"    : zero_arr,
                         "parameter": "peak_error",
                         "units"    : "s",
                         "function" : average_by
                         },
-                "Rise time to peak: amplitude": {
+                "Rise time to peak: amplitude" : {
                         "value"    : zero_arr,
                         "parameter": "rise_time_peak",
                         "units"    : "s",
@@ -272,7 +271,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                         "units"    : "s",
                         "function" : average_by
                         },
-                "Real end time": {
+                "Real end time"                : {
                         "value"    : zero_arr,
                         "parameter": "end_time",
                         "units"    : "s",
@@ -336,7 +335,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                     "Intercept"       : {
                             "value"    : zero_arr,
                             "parameter": "intercept",
-                            "units"    : const["units"]+"²",
+                            "units"    : const["units"] + "²",
                             "function" : None
                             },
                     "Unitary current" : {
@@ -436,8 +435,8 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                     plt.plot(current, variance, "ko")
                     artificial_current = np.linspace(
                             0.0,
-                            np.min(current),  # TODO make this for positive going too
-                            np.round(np.abs(np.min(current))).astype(int)  # TODO make this for positive going too
+                            np.min(current),
+                            np.round(np.abs(np.min(current))).astype(int)
                             )
                     label = f"0:{intercept:2.1f},i:{unitary_current:2.1f},N:{channel_count:2.1f},P0:{p_0:1.2f} {n_e}"
                     plt.plot(
@@ -452,6 +451,9 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                     plt.title(f"Average and Var around the mean {rec.time[0]:4.2f} {rec.time[-1]:4.2f}")
                     plt.legend(loc='upper left')
                     plt.show(block=False)
+
+                actual_plot_increment = {"start": start_s, "end": end_s, "increment": const["plot_increment"]}
+
                 # Saving & plotting for events
                 for analysis_type, components in events_analyses.items():
                     components["value"] = components["value"][1:].T
@@ -463,7 +465,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                                     "analysis_type": analysis_type
                                     },
                             components["units"],
-                            const["plot_increment"],
+                            actual_plot_increment,
                             const["bins"],
                             components["function"],
                             const["plot"]
@@ -479,7 +481,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                                     "analysis_type": analysis_type
                                     },
                             components["units"],
-                            const["plot_increment"],
+                            actual_plot_increment,
                             const["bins"],
                             components["function"],
                             const["plot"]
