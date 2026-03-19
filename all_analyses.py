@@ -6,7 +6,7 @@ import sys
 from lib_gui import AnalysisSelector
 from lib_utility import timing
 import cm_ps_events as ce
-import vc_rira as rr
+import cm_resistance as rr
 import cm_area_peak as cap
 import cm_filter as cf
 import cm_cleaner as cl

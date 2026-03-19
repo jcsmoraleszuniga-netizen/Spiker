@@ -1,12 +1,12 @@
 #!/usr/bin/env python
+import gc
 
 import matplotlib.pyplot as plt
 import numpy as np
 import lib_gui as gui
 from lib_event_detection import EvtPro, make_instances, plot_rec
 from lib_utility import (
-    average_by, event_fr, event_aft, make_sections, make_name, auto_save, save_plot, manage_settings,
-    file_info, replace
+    average_by, event_fr, event_aft, get_names, make_sections, make_name, auto_save, save_plot, file_info, replace
     )
 from typing import Any
 
@@ -15,6 +15,8 @@ const: dict[str, Any] = dict(
         event_type="EPSC",  # AP, EPSP, EPSC, IPSP, IPSC or Calcium
         units="pA",  # Units of the responses
         direction=-1,  # Is the response going in the positive (+1) or negative direction (-1)?
+        evoked=True,  # different type of analysis depending on time locked responses
+        pair_pulse=True,  # activates pair pulse analysis. 2 pathways as default
         n_deviations_peak=3.0,  # threshold deviations for peaks
         n_deviations_slope=3.0,  # threshold deviations for derivative peaks
 
@@ -70,6 +72,21 @@ const: dict[str, Any] = dict(
         plot=True,  # Plot and save, if False the function just saves the analysis
         debug=False,
         factor=10,
+        psnsfa_x0=-10,
+        psnsfa_x1=1,
+        psnsfa_y0=1,
+        psnsfa_y1=10,
+
+        pp1_r1=0.75,
+        pp1_r2=0.83,
+        pp1_artifact=0.002,  # Artifact delta. The time that the stimulation artifact lasts
+        pp2_r1=1.75,
+        pp2_r2=1.83,
+        pp2_artifact=0.002,  # Artifact delta. The time that the stimulation artifact lasts
+        search_resp=0.01,  # max interval to search the response. search_resp < pp1_r2 - pp1_r1
+
+        # TODO use a different baseline, or assess using 10 ms instead.
+
         )
 
 
@@ -130,7 +147,9 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> tuple[EvtPro, EvtPro
             const["slope_peak_time"], const["max_slope"], const["peak_to_peak"], const["t_bef"], const["t_aft"],
             const["zero_peak_to_amp_peak"], const["baseline_time"], const["max_rise_time"]
             )
+
     rec.get_alig(const["alignment"])
+
     min_amplitude = const["direction"] * rec.std * const["n_deviations_peak"]
     print(f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~Recommended minimum amplitude: {min_amplitude:.3f}")
     rec.get_amplitudes(
@@ -154,6 +173,7 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> tuple[EvtPro, EvtPro
                 const["n_limit"],
                 const["min_amplitude"]
                 )
+
     rec.get_extended()  # Extension of the events to use a common time interval
     if const["event_type"] == "AP":
         rec.get_threshold()
@@ -165,9 +185,23 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> tuple[EvtPro, EvtPro
                 const["psnsfa_n_limit"],
                 const["peak_radius"],
                 )
+        axis_tuple = ((const["psnsfa_x0"], const["psnsfa_x1"]), (const["psnsfa_y0"], const["psnsfa_y1"]))
+        rec.plot_ps_nsfa(axis_tuple)
+
+    rec.identify_evoked(
+            const["pp1_r1"], const["pp1_r2"], const["pp1_artifact"],
+            const["pp2_r1"], const["pp2_r2"], const["pp2_artifact"],
+            const["search_resp"],
+            )
+
     rec.get_frequencies()
     rec.get_intervals()
     rec.get_half_width()
+
+    if const["show_everything"]:
+        title = f"From {start:0>4} to {end:0>4}. Detected {const["event_type"]}: "
+        rec.show_all_events(title, True, const["adjust"])
+        rec.show_events_aligned(title)
 
     # RAM release
     del rec_smooth
@@ -186,20 +220,12 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
         total: Total time of the analysis.
         interval: Interval for sectioning the data.
     """
-    file_name: str = ori_inst.get_info('file', 'name')
-    file_name = replace(".", "_", file_name)  # Dot removal
-    print(f"{file_name = }")
-    file_number: str = ori_inst.get_info('file', 'number')
-    print(f"{file_number = }")
-    file_parent: str = ori_inst.get_info('file', 'parent')
-    print(f"{file_parent = }")
-    script_name: str = file_info(__file__, 'name')
-    script_name = replace(".", "_", script_name)  # Dot removal
-    print(f"{script_name = }")
+    # Names and routes of the files
+    file_name, file_number, file_parent, script_name = get_names(ori_inst, __file__)
     common_name: list = [file_name, script_name]
 
     const_file = file_parent + make_name(common_name + ["const"], ".json")
-    const.update(manage_settings(const_file, const))
+    const.update(gui.manage_settings(const_file, const))
     common_name += [const["event_type"], const["alignment"]]
     # "t_bef" must be at least the size of "zero_pass_frame"
     if const["zero_pass_frame"] > const["t_bef"]:
@@ -213,10 +239,11 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
     else:
         sweep_count = [1]
     # for sweep_number, _ in enumerate(ori_inst.sweeps):
+    zero_arr = np.array([[0, 0]])
     for sweep_number, _ in enumerate(sweep_count):
-        zero_arr = np.array([[0, 0]])
+        # zero_arr = np.array([[0, 0]])
         # For single events
-        events_analyses = {
+        events_analyses = {  # TODO load this dict from a json file
                 "Amplitude"                    : {
                         "value"    : zero_arr,
                         "parameter": "amplitude",
@@ -280,7 +307,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                 }
         # Analysis for fast or high frequency events
         if const["event_type"] in ["AP", "EPSP", "EPSC", "IPSP", "IPSC"]:
-            fast_events_dict = {
+            fast_events_dict = {  # TODO load this dict from a json file
                     "Instant Frequency": {
                             "value"    : zero_arr,
                             "parameter": "r_ifreq",
@@ -327,8 +354,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                             },
                     }
             events_analyses.update(threshold_dict)
-        # sweep_number = 4
-        # For sections
+
         section_analyses = {}
         if const["use_psnsfa"]:
             psnsfa_dict = {
@@ -359,6 +385,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                     }
             section_analyses.update(psnsfa_dict)
         for section in make_sections(start, total, interval):
+            start_s, end_s = section
             if ori_inst.mode == "sweeps":
                 ori_inst.set_resp(sweep_number)
             print(f"{section = }")
@@ -367,42 +394,28 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
             times_of_peaks: np.ndarray = rec.get_arr("t_o_p")
             if len(rec.events_attrs) > 0:
                 print("...At least one event")
-                # Specific for events
-                for components in events_analyses.values():
-                    components["value"] = np.append(
-                            components["value"],
-                            np.stack((times_of_peaks, rec.get_arr(components["parameter"])), axis=0).T,
-                            axis=0
-                            )
+
                 # Specific for events
                 events: np.ndarray = np.concatenate(([rec.common_time], rec.get_arr("r_segm")), axis=0).T
-                start_s, end_s = section
                 events_name = common_name + [
                         f"{sweep_number:0>2}_{start_s:0>4}_{end_s:0>4}_events_{len(events.T[1:])}"]
                 out_name_evn = file_parent + make_name(events_name)
                 print(f"{out_name_evn = }")
                 auto_save(events, out_name_evn)  # Events saved for every section
-                events_num = len(events.T[1:])
-                alpha_val = 1.0 / (events_num + 1) + 0.03
-                if const["show_everything"]:
-                    rec.show_all_events(f"{sweep_number = }. Detected Events: ", True, const["adjust"])
-                    # Plotting all events
-                    plt.figure(figsize=(3, 2.5))
-                    for event in events.T[1:]:
-                        plt.plot(events.T[0], event, "k", alpha=alpha_val)
-                    plt.plot(
-                            np.nanmean(rec.get_arr("t_segm"), axis=0),
-                            np.nanmean(rec.get_arr("r_segm"), axis=0),
-                            "r:"
+
+                # Specific for events
+                for components in events_analyses.values():  # appending consecutive the values every iteration
+                    # print(f"{components["value"].shape = }  {components["value"] = }")
+                    # print(f"{len(times_of_peaks) = }  {times_of_peaks = }")
+                    # print(f"{len(rec.get_arr(components["parameter"])) = }  {rec.get_arr(components["parameter"]) = }")
+                    components["value"] = np.append(
+                            components["value"],
+                            np.stack((times_of_peaks, rec.get_arr(components["parameter"])), axis=0).T,
+                            axis=0
                             )
-                    plt.axhline(y=0.0, color='r', linestyle='dashed')
-                    plt.title(f"#{const["event_type"]}: {events_num}. From {start_s:0>4} to {end_s:0>4}.")
-                    plt.show(block=False)
+
                 # Specific for sections
                 for components in section_analyses.values():
-                    # print(f"{components=}")
-                    # print(f"{rec.get_arr(components["parameter"], "section")=}")
-                    # print(f"{np.array([(rec.time[0] + rec.time[-1]) / 2, rec.get_arr(components["parameter"], "section")])=}")
                     components["value"] = np.append(
                             components["value"],
                             np.array(
@@ -415,86 +428,55 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                                     ),
                             axis=0
                             )
-                # Specific for sections
-                # Implement the plotting of current vs variance for psNSFA
-                if const["use_psnsfa"]:
-                    current = rec.ps_nsfa_values["binned_current"]
-                    variance = rec.ps_nsfa_values["binned_variance"]
-                    intercept = rec.ps_nsfa_values["intercept"]
-                    unitary_current = rec.ps_nsfa_values["i"]
-                    channel_count = rec.ps_nsfa_values["N"]
-                    p_0 = rec.ps_nsfa_values["p_0"]
-                    n_e = rec.ps_nsfa_values["#events"]
-                    # Plotting psNSFA
-                    plt.figure(figsize=(3, 2.5))
-                    plt.axhline(0.0, color="k", linestyle='--')
-                    plt.axvline(0.0, color="k", linestyle='--')
-                    plt.axvline(rec.std * 3.0 * rec.direction, color="r", linestyle='--')
-                    plt.axvline(rec.std * 2.0 * rec.direction, color="r", linestyle='--')
-                    plt.axvline(rec.std * rec.direction, color="r", linestyle='--')
-                    plt.plot(current, variance, "ko")
-                    artificial_current = np.linspace(
-                            0.0,
-                            np.min(current),
-                            np.round(np.abs(np.min(current))).astype(int)
-                            )
-                    label = f"0:{intercept:2.1f},i:{unitary_current:2.1f},N:{channel_count:2.1f},P0:{p_0:1.2f} {n_e}"
-                    plt.plot(
-                            artificial_current,
-                            unitary_current * artificial_current - np.power(artificial_current, 2) / channel_count,
-                            "r:",
-                            label=label,
-                            )
-                    plt.axhline(intercept, color="r", linestyle='--')
-                    plt.xlim(-50, 1)  # Set x-axis limits from 0 to 6
-                    plt.ylim(-1, 40)  # Set y-axis limits from 5 to 35
-                    plt.title(f"Average and Var around the mean {rec.time[0]:4.2f} {rec.time[-1]:4.2f}")
-                    plt.legend(loc='upper left')
-                    plt.show(block=False)
-
-                actual_plot_increment = {"start": start_s, "end": end_s, "increment": const["plot_increment"]}
-
-                # Saving & plotting for events
-                for analysis_type, components in events_analyses.items():
-                    components["value"] = components["value"][1:].T
-                    save_plot(
-                            components["value"],
-                            {
-                                    "file_parent"  : file_parent, "common_name": common_name,
-                                    "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
-                                    "analysis_type": analysis_type
-                                    },
-                            components["units"],
-                            actual_plot_increment,
-                            const["bins"],
-                            components["function"],
-                            const["plot"]
-                            )
-                # Saving & plotting for sections
-                for analysis_type, components in section_analyses.items():
-                    components["value"] = components["value"][1:].T
-                    save_plot(
-                            components["value"],
-                            {
-                                    "file_parent"  : file_parent, "common_name": common_name,
-                                    "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
-                                    "analysis_type": analysis_type
-                                    },
-                            components["units"],
-                            actual_plot_increment,
-                            const["bins"],
-                            components["function"],
-                            const["plot"]
-                            )
             else:
                 print(f"No events detected!!")
 
-            del rec
+        actual_plot_increment = {"start": start, "end": total, "increment": const["plot_increment"]}
+
+        # Saving & plotting for events
+        for analysis_type, components in events_analyses.items():
+            components["value"] = components["value"][1:].T  # removing zero_arr
+            save_plot(
+                    components["value"],
+                    {
+                            "file_parent"  : file_parent, "common_name": common_name,
+                            "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
+                            "analysis_type": analysis_type
+                            },
+                    components["units"],
+                    actual_plot_increment,
+                    const["bins"],
+                    components["function"],
+                    const["plot"]
+                    )
+
+        # Saving & plotting for sections
+        for analysis_type, components in section_analyses.items():
+            components["value"] = components["value"][1:].T  # removing zero_arr
+            save_plot(
+                    components["value"],
+                    {
+                            "file_parent"  : file_parent, "common_name": common_name,
+                            "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
+                            "analysis_type": analysis_type
+                            },
+                    components["units"],
+                    actual_plot_increment,
+                    const["bins"],
+                    components["function"],
+                    const["plot"]
+                    )
+
+    del rec  # RAM release
+    # Manually trigger garbage collection
+    collected = gc.collect()
+    print(f"Garbage collector collected {collected} objects.")
+    print("Memory should now be freed (though the OS might not immediately show it).")
 
 
 if __name__ == "__main__":
     # For testing purposes
-    from PyQt6.QtWidgets import QApplication, QFileDialog
+    from PyQt6.QtWidgets import QApplication
     import sys
     import os
     from lib_utility import get_previous_folder, save_previous_folder
@@ -504,10 +486,9 @@ if __name__ == "__main__":
     if not previous_folder:
         previous_folder = os.path.expanduser("~")
     file_path_out, _ = gui.open_file_dialog(None, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
-    # file_path_out, _ = QFileDialog.getOpenFileName(None, "Open ABF File", previous_folder, "ABF Files (*.abf)")
     if file_path_out:
         save_previous_folder(os.path.dirname(file_path_out))
         original = EvtPro(file_path_out, True)
         gui.show_plot(original, title="Select the time of the sections: ")
         bound: int = int(original.time[-1])
-        main(original, 0, bound, bound)
+        main(original, 0, bound, 600)

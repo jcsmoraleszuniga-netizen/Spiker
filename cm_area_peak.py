@@ -2,7 +2,7 @@
 from typing import Optional, Any
 # import lib_gui as gui
 import matplotlib.pyplot as plt
-from lib_utility import replace, make_name, manage_settings, file_info
+from lib_utility import replace, file_info
 import csv
 from copy import copy as cp_copy
 
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     from PyQt6.QtWidgets import QApplication, QFileDialog
     from lib_utility import save_previous_folder, get_previous_folder, make_name
     from lib_event_detection import EvtPro
-    from lib_gui import show_plot
+    from lib_gui import manage_settings, show_plot
 
     app = QApplication(sys.argv)
     previous_folder: Optional[str] = get_previous_folder()

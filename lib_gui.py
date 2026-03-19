@@ -1,7 +1,7 @@
 import gc
 import os
 from lib_event_detection import EvtPro
-from lib_utility import get_previous_folder, load_dict, save_previous_folder
+from lib_utility import get_previous_folder, load_dict, save_dict, save_previous_folder
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QDialog, QLabel, QLineEdit, QPushButton,
@@ -43,7 +43,6 @@ _current_plot = None  # Global variable to store the current plot figure
 def show_plot(original, title="No Title.", values=(0.0, 0.0)):
     """
     Displays a plot of the original data, optionally with vertical lines.
-
     Args:
         original: The data to plot (an object with coti and resp attributes).
         title: The title of the plot.
@@ -469,6 +468,20 @@ class InputDialog(QDialog):  # Inherit from QDialog
         except ValueError:
             # QMessageBox.critical(self, "Error", "Incorrect Value, try 0.1")
             QMessageBox.critical(self, "Error", self.warning)
+
+
+def manage_settings(const_file: str, const: dict):
+    """Opens a stored dictionary 'const_file' to be modified. If there is no 'const_file' stored,
+    uses 'const' as a default to begin the modification"""
+    loaded_dict = load_dict(const_file, const)
+    updated_const: dict = ConstDialog(loaded_dict, "Event detection")
+    if updated_const:
+        loaded_dict.update(updated_const)
+        print("Constants updated.")
+    else:
+        print("Constants-dialog canceled.")
+    save_dict(const_file, loaded_dict)
+    return loaded_dict
 
 
 if __name__ == "__main__":

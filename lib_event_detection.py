@@ -1,25 +1,24 @@
 import copy
+import warnings
 from itertools import pairwise, repeat
-from pprint import pprint
 from typing import List, Any
-
-from fontTools.unicodedata import block
+from numba import njit
 from numpy import ndarray, dtype, flipud
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.signal import fftconvolve
+
 from lib_utility import (
-    exp_fit, parabolic_fit, remove_nan, vtp, conv_vector, differentiate, find_over_threshold, find_peaks, opt_linear,
-    linear,
-    opt_expdec,
-    crossing_point, extender, exp_decay, apply_by, exp_to_lin, mse, timing, prev_change,
-    down_sample_function, ptv, smoothing, reset_array, split_position, remove_shift, file_info,
-    calculate_area, correct_bound
+    down_sample_function_t, exp_decay, exp_fit, lin_fit, parabolic_fit, remove_nan, vtp, conv_vector, differentiate,
+    find_over_threshold,
+    find_peaks,
+    crossing_point, extender, apply_by, mse, timing, prev_change, down_sample_function, smoothing, reset_array,
+    remove_shift, file_info, calculate_area, correct_bound
     )
 from copy import copy as cp_copy
+from scipy.signal import fftconvolve
 from scipy import fft
-from matplotlib.ticker import ScalarFormatter, FuncFormatter
+from matplotlib.ticker import FuncFormatter
 
 
 @timing
@@ -103,14 +102,16 @@ class abf_numpy(ABF, base):
             self._initialize()
 
     @timing
-    def _get_resp(self):
-        self.resp = self.data[0]
+    def _get_resp(self, location=0):
+        self.resp = self.data[location]
+        print(f"{self.resp = }")
 
     @timing
     def _get_time(self):
         self.setSweep(0)
         time = self.sweepX
-        self.t_delta: np.floating = np.round(self.sweepX[1] - self.sweepX[0], decimals=4)  # time increment
+        self.t_delta: np.floating = np.round(self.sweepX[1] - self.sweepX[0], decimals=8)  # time increment
+        print(f"{self.t_delta = }")
         cont_time = [(time := self.sweepX + (time[-1] + self.t_delta)) for _ in repeat(None, self.sweepCount - 1)]
         cont_time.insert(0, self.sweepX)
         self.time = np.array(tuple(cont_time)).flatten()
@@ -146,7 +147,8 @@ class csv_numpy(base):
     @timing
     def _get_time(self):
         self.time: np.ndarray = self.record[0] - self.record[0][0]  # To ensure that starts at 0.0
-        self.t_delta = np.round(self.record[0][1] - self.record[0][0], decimals=4)  # time increment
+        self.t_delta = np.round(self.record[0][1] - self.record[0][0], decimals=8)  # time increment
+        print(f"{self.t_delta = }")
 
     @timing
     def _initialize(self):
@@ -246,28 +248,42 @@ class loadRecord(base):
     @timing
     def section(self, start, end):
         start_pos = end_pos = 0
+        print(f"{self.time[0] = }  {self.time[-1] = }")
         try:
             start_pos = np.where(start == self.time)[0][0]
         except IndexError:
-            if start < self.time[0]:
-                print(f"Using {0} {self.time[0] = }")
-                start_pos = 0
+            closest_pos = np.argmin(np.abs(self.time - end))
+            print(f"Using {len(self.time) = } {self.time[-1] = }  {closest_pos = }  {self.time[closest_pos]}")
+            start_pos = closest_pos
+            # if start < self.time[0]:
+            #     print(f"Using {0} {self.time[0] = }")
+            #     start_pos = 0
         try:
             end_pos = np.where(end == self.time)[0][0]
         except IndexError:
-            if end > self.time[-1]:
-                print(f"Using {len(self.time) = } {self.time[-1] = }")
-                end_pos = len(self.time)
-
+            closest_pos = np.argmin(np.abs(self.time - end))
+            print(f"Using {len(self.time) = } {self.time[-1] = }  {closest_pos = }  {self.time[closest_pos]}")
+            end_pos = closest_pos
+            # if end > self.time[-1]:
+            #     print(f"Using {len(self.time) = } {self.time[-1] = }")
+            #     end_pos = len(self.time)
+        print(f"{start_pos = }  {end_pos = }")
         self.resp = self.resp[start_pos:end_pos]
         self.time = self.time[start_pos:end_pos]
         self.cdac = self.cdac[start_pos:end_pos]
 
     @timing
-    def down_sample(self, down_sample=10):
-        self.time = down_sample_function(self.time, down_sample)
-        self.resp = down_sample_function(self.resp, down_sample)
-        self.cdac = down_sample_function(self.cdac, down_sample)
+    def down_sample(self, down_sample=10, with_threshold=False, accept_mask=None):
+        if not with_threshold:
+            print(f"{with_threshold = }")
+            self.time = down_sample_function(self.time, down_sample)
+            self.resp = down_sample_function(self.resp, down_sample)
+            self.cdac = down_sample_function(self.cdac, down_sample)
+        elif with_threshold:
+            print(f"{with_threshold = }")
+            self.time = down_sample_function_t(self.time, accept_mask, down_sample)
+            self.resp = down_sample_function_t(self.resp, accept_mask, down_sample)
+            self.cdac = down_sample_function_t(self.cdac, accept_mask, down_sample)
 
     @timing
     def get_stack(self, size=2):
@@ -306,6 +322,7 @@ class Fourier(loadRecord):
     @timing
     def _get_fft_series(self, option):
         self.fft_series = fft.rfft(option)
+        print(f"{self.fft_series = }")
 
     @timing
     def _get_fft_domain(self):
@@ -314,6 +331,7 @@ class Fourier(loadRecord):
 
     @timing
     def get_fft(self, component='resp'):
+        print(f"{component = }  delete me after using...")
         match component:
             case 'resp':
                 option = self.resp
@@ -323,6 +341,7 @@ class Fourier(loadRecord):
                 option = self.cdac
             case _:
                 option = None
+        print(f"{option = }  delete me after using...")
         self._get_fft_series(option)
         self._get_fft_domain()
 
@@ -339,7 +358,6 @@ class Fourier(loadRecord):
         for freq in frequencies_to_filter:
             f_pos = vtp(freq, self.freq_increment)
             if freq == 0.0:
-
                 fft_series[:w_pos + 1] *= attenuation
             else:
                 fft_series[f_pos - w_pos: f_pos + w_pos + 1] *= attenuation
@@ -348,8 +366,11 @@ class Fourier(loadRecord):
     @timing
     def fft_plot(self, title="Theoretical FFT"):
         print(f"A phase")
+        print(f"{self.fft_domain = }  {(1 / self.t_delta) = }  {self.t_delta = }")
         f_r_theoretical = self.fft_domain * (1 / self.t_delta)  # Restores the proportions
         f_s_theoretical = 2 * np.abs(self.fft_series) / len(self.time)  # Restores the proportions
+        print(f"{f_r_theoretical = }")
+        print(f"{f_s_theoretical = }")
         print(f"B phase")
         plt.figure()
         plt.title(title)
@@ -389,8 +410,8 @@ class Analyzer(Fourier):
 
     @timing
     def get_smooth(self, smooth_width=0.001, repetitions=1, sharpness=4):
-        print(f"{smooth_width = } {self.t_delta = }")
         n_p = vtp(smooth_width, self.t_delta)
+        print(f"{smooth_width = } {self.t_delta = } {n_p = }")
         self.resp = smoothing(self.resp, n_p, repetitions, sharpness)
 
     @timing
@@ -430,6 +451,7 @@ class Analyzer(Fourier):
         plt.show()
 
     @timing
+    # @njit
     def find_pulses(self, direction: int = -1) -> None:
         """It gives the position of the start of the control pulses"""
         der_test_resp = differentiate(self.cdac, self.t_delta)
@@ -437,7 +459,7 @@ class Analyzer(Fourier):
         threshold = der_test_resp * 0.0 + self.direction * 9 * np.std(der_test_resp)
         o_thresh = find_over_threshold(der_test_resp, threshold, direction)
         self.pulses_peaks = find_peaks(o_thresh, der_test_resp, direction, self.t_delta, self.t_delta)
-        self.pul_attrs = {evt_pos: {} for evt_pos, _ in enumerate(self.pulses_peaks) if self.pulses_peaks[evt_pos]}
+        self.pul_attrs = {evt_pos: {} for evt_pos, val in enumerate(self.pulses_peaks) if val}
 
     @timing
     def del_pulses(self, del_length=0.75, target_val=2000.0):
@@ -459,18 +481,16 @@ class Analyzer(Fourier):
         n_p = vtp(time_frame, self.t_delta)
         # fftconvolve is better for long arrays
         smoothed_resp = fftconvolve(self.resp, conv_vector(n_p, 'g', sharpness), mode='same')  # response
-        # print(f"{smoothed_resp = }")
         # Calculates the standard deviation every resp_increment
         resp_increment = {"start": self.time[0], "end": self.time[-1], "increment": resp_increment}
         std_resp = apply_by(np.std, np.array([self.time, self.resp]), resp_increment, True)
-        # print(f"{std_resp = }  {std_increment = }")
         # Selects the minimum value every std_increment
         if std_increment > self.time[-1]:
-            print(f"Warning: {std_increment = } is bigger than the time interval {self.time[-1] = }.")
+            warnings.warn(f"{std_increment = } is bigger than the time interval {self.time[-1] = }.")
+            # print(f"Warning: {std_increment = } is bigger than the time interval {self.time[-1] = }.")
             std_increment = int(self.time[-1])
         std_increment = {"start": std_resp[0][0], "end": std_resp[0][-1], "increment": std_increment}
         std_min = apply_by(np.min, std_resp, std_increment, True)
-        # print(f"{std_min = }")
         self.std = np.nanmean(std_min[1])
         self.peak_noise = smoothed_resp + np.interp(
                 self.time, std_min[0],
@@ -485,19 +505,46 @@ class Analyzer(Fourier):
     def get_o_thresh(self):
         self.o_thresh = find_over_threshold(self.resp, self.peak_noise, self.direction)
 
+    # @timing
+    # def get_peaks(self, search_width=0.01, shift_time=0.001):
+    #     self.get_o_thresh()
+    #     self.peaks = find_peaks(self.o_thresh, self.resp, self.direction, search_width, self.t_delta)
+    #     # This block is for removing the false positives generated by the peaks of the artifacts
+    #     if len(self.pulses_peaks):
+    #         tmp_peaks = np.copy(self.peaks)
+    #         shift = vtp(shift_time, self.t_delta)
+    #         for peak_pos, peak_value in enumerate(tmp_peaks):
+    #             shift_slice = slice(peak_pos - shift, peak_pos + shift)
+    #             length_value = len(self.pulses_peaks[shift_slice])
+    #             if length_value and peak_value and np.max(self.pulses_peaks[shift_slice]):
+    #                 self.peaks[peak_pos] = 0.0
+
     @timing
     def get_peaks(self, search_width=0.01, shift_time=0.001):
         self.get_o_thresh()
         self.peaks = find_peaks(self.o_thresh, self.resp, self.direction, search_width, self.t_delta)
-        # This block is for removing the false positives generated by the peaks of the artifacts
-        if len(self.pulses_peaks):
-            tmp_peaks = np.copy(self.peaks)
+
+        # Vectorized artifact removal
+        # Only proceed if there are artifacts to filter against
+        if np.any(self.pulses_peaks):
             shift = vtp(shift_time, self.t_delta)
-            for peak_pos, peak_value in enumerate(tmp_peaks):
-                length_value = len(self.pulses_peaks[peak_pos - shift:peak_pos + shift])
-                if length_value and peak_value and np.max(self.pulses_peaks[peak_pos - shift:peak_pos + shift]):
-                    self.peaks[peak_pos] = 0.0
-            # self.peaks = tmp_peaks
+
+            # 1. Identify where artifacts are (boolean array)
+            has_artifact = (self.pulses_peaks != 0).astype(int)
+
+            # 2. Create a "smearing" kernel
+            # The slice [i-shift : i+shift] has a width of 2*shift
+            # We use 'mode=same' so the window is centered on the artifact
+            kernel_size = 2 * shift
+            if kernel_size < 1: kernel_size = 1
+            kernel = np.ones(kernel_size, dtype=int)
+
+            # 3. Convolve to create a "danger zone" mask
+            # This returns True wherever an artifact is within the shift distance
+            artifact_mask = np.convolve(has_artifact, kernel, mode='same') > 0
+
+            # 4. Zero out peaks that fall inside the danger zone
+            self.peaks[artifact_mask] = 0.0
 
     @timing
     def get_z_pass(self, zero_pass_frame=0.005, delete_peaks=True):
@@ -525,9 +572,9 @@ class Analyzer(Fourier):
                 aft_zero = crossing_point(front)
                 bef_zero = crossing_point(back)
                 if None in (aft_zero, bef_zero):
-                    print(f"{(aft_zero, bef_zero) = }")
+                    # print(f"{(aft_zero, bef_zero) = }")
                     if delete_peaks:
-                        print(f"Peak {evt_pos} deleted")
+                        # print(f"Peak {evt_pos} deleted")
                         self.peaks[evt_pos] = 0
                 else:
                     zero_pass[evt_pos - bef_zero] = -1
@@ -536,70 +583,84 @@ class Analyzer(Fourier):
         self.zero_pass = zero_pass
 
     @timing
-    def get_rescap(self, std_max=0.1):  # Use a low value for restriction, like 0.1
-        test_response = self.resp  # * np.where(self.mask == 1, 0, 1)  # Inverted mask # Common for both calculations
-        peaks = self.pulses_peaks
-        mem_res = []  # Specific for each calculation
-        mem_cap = []  # Specific for each calculation
-        beg_res = vtp(0.2, self.t_delta)
-        end_res = vtp(0.35, self.t_delta)
-        beg_cap = vtp(0.005, self.t_delta)
-        end_cap = vtp(0.1, self.t_delta)
-        for pos in np.arange(len(peaks)):
-            if peaks[pos]:
-                pos += 1  # Shift correction
-                # Membrane resistance (input resistance) calculations and fitting
-                current_res = -self.cdac[pos + beg_res:pos + end_res] - self.cdac[pos + end_res]
-                voltage_res = -test_response[pos + beg_res:pos + end_res] + test_response[pos + end_res - 1]
-                pr_lin = opt_linear(current_res, voltage_res)
+    def get_rescap(
+            self, beg_rc=0.005, end_rc=0.1, beg_ir=0.2, end_ir=0.35
+            ):
+        exp_fit_local = exp_fit
+        lin_fit_local = lin_fit
+        np_average = np.average
+        np_abs = np.abs
+        beg_cap = vtp(beg_rc, self.t_delta)  # To avoid Rs artifact
+        end_cap = vtp(end_rc, self.t_delta)
+        beg_res = vtp(beg_ir, self.t_delta)  # To avoid passive responses
+        end_res = vtp(end_ir, self.t_delta)
+        current_pulse = None
+        current_ires = np.array([])
+        for pos, value in enumerate(self.pulses_peaks):
+            if value:
+                # Storing the time of the peak
+                self.pul_attrs[pos]["t_o_p"] = self.time[pos]
+                # Current pulse intensity
+                pulse_slice = slice(pos + beg_cap, pos + end_cap)
+                pulse_base_slice = slice(pos - 2 * beg_cap, pos - beg_cap)
+                if current_pulse is None:
+                    current_pulse = np_average(self.cdac[pulse_slice]) - np_average(self.cdac[pulse_base_slice])
                 # Membrane capacitance calculations and fitting
-                time_cap = self.time[pos + beg_cap:pos + end_cap] - self.time[pos + beg_cap]
-                voltage_cap = test_response[pos + beg_cap:pos + end_cap] - test_response[pos + end_cap]
-                pr_exp = opt_expdec(time_cap, voltage_cap)
-                if np.all(np.sqrt(np.diag(pr_lin[1])) < std_max) and pr_lin[0][0] > 0:  # STD condition linear fit
-                    mem_res.append((self.time[pos], pr_lin[0][0] * 10 ** 3))  # In mega ohms
-                    if np.all(np.sqrt(np.diag(pr_exp[1])) < std_max) and pr_exp[0][2] > 0:  # STD condition exp fit
-                        mem_cap.append((self.time[pos], pr_exp[0][2] / (pr_lin[0][0] * 10 ** -3)))  # In pF
-        self.inp_res = np.array(mem_res)
-        self.mem_cap = np.array(mem_cap)
+                rc_slice = slice(pos + beg_cap, pos + end_cap)
+                time_rc = self.time[rc_slice] - self.time[pos]
+                voltage_rc = self.resp[rc_slice] - np_average(self.resp[pulse_base_slice])
+                # Fits data to an exponential decay. I(t) = i0 + pk0 * exp(-t / t0), returns i0, pk0, t0"""
+                fit_i0, fit_pk0, fit_t0, pearson_r = exp_fit_local(voltage_rc, time_rc, -1 * self.direction)
+                # Membrane resistance (input resistance) calculations and fitting
+                ir_slice = slice(pos + beg_res, pos + end_res)
+                if len(current_ires) == 0:
+                    current_ires = self.cdac[ir_slice]
+                voltage_ires = self.resp[ir_slice]
+                ires, intercept, r_value, p_value, std_err, i_stderr = lin_fit_local(voltage_ires, current_ires)
+                # Storing
+                self.pul_attrs[pos]["input_res"] = ires * 10 ** 3  # In mega Ohms
+                self.pul_attrs[pos]["mem_cap"] = np_abs((10 ** 3) * fit_t0 * current_pulse / fit_pk0)  # In pico Farads
+                self.pul_attrs[pos]["mem_tau"] = fit_t0  # In seconds
+
+        self.inp_res = np.array([self.get_pulse_arr("t_o_p"), self.get_pulse_arr("input_res")]).T
+        self.mem_cap = np.array([self.get_pulse_arr("t_o_p"), self.get_pulse_arr("mem_cap")]).T
 
     @timing
     def get_rira(self, beg_ar=0.02, end_ar=0.005, beg_ir=0.25, end_ir=0.750):
-        peaks = self.pulses_peaks
+        lin_fit_local = lin_fit
+        np_average = np.average
+        np_min = np.min
+        np_abs = np.abs
         bas_acc = vtp(beg_ar - 0.001, self.t_delta)
         beg_acc = vtp(beg_ar, self.t_delta)
         end_acc = vtp(end_ar, self.t_delta)
         beg_res = vtp(beg_ir, self.t_delta)
         end_res = vtp(end_ir, self.t_delta)
-        v_diff = 0
-        voltage_input = np.array([])
-        for pos in np.arange(len(peaks)):
-            if peaks[pos]:
+        voltage_pulse = None
+        voltage_ires = np.array([])
+        for pos, value in enumerate(self.pulses_peaks):
+            if value:
                 # Storing the time of the peak
                 self.pul_attrs[pos]["t_o_p"] = self.time[pos]
                 # Access resistance calculations
-                voltage_acc = self.cdac[pos - beg_acc:pos + end_acc]
+                pulse_slice = slice(pos + end_acc, pos + beg_acc)
+                pulse_base_slice = slice(pos - beg_acc, pos - end_acc)
+                if voltage_pulse is None:
+                    voltage_pulse = np_average(self.cdac[pulse_slice]) - np_average(self.cdac[pulse_base_slice])
                 current_acc = self.resp[pos - beg_acc:pos + end_acc]
-                if v_diff == 0:
-                    v_diff = voltage_acc[:bas_acc][0] - np.min(voltage_acc)
-                base_current = np.mean(current_acc[:bas_acc])
-                c_diff = base_current - np.min(current_acc)
-                # Storing access resistance values
-                # self.pul_attrs[pos]["acc_res"] = (v_diff / c_diff) * 10 ** 3
-                self.pul_attrs[pos]["v_pulse"] = v_diff
-                self.pul_attrs[pos]["base_current"] = base_current
-                self.pul_attrs[pos]["acc_res"] = (v_diff / c_diff) * 1000
+                base_current = np_average(current_acc[:bas_acc])
+                c_diff = base_current - np_min(current_acc)
                 # Input resistance calculations and fitting
-                if len(voltage_input) == 0:
-                    voltage_input = self.cdac[pos + beg_res:pos + end_res]
-                current_input = self.resp[pos + beg_res:pos + end_res]
-                pr_lin = opt_linear(current_input, voltage_input)
-                # STD condition linear fit
-                # Storing input resistance values
-                self.pul_attrs[pos]["input_res"] = pr_lin[0][0] * 1000
-                self.pul_attrs[pos]["input_volt"] = voltage_input
-                self.pul_attrs[pos]["input_curr"] = current_input
-                self.pul_attrs[pos]["input_STD"] = np.sqrt(np.diag(pr_lin[1]))
+                ir_slice = slice(pos + beg_res, pos + end_res)
+                if len(voltage_ires) == 0:
+                    voltage_ires = self.cdac[ir_slice]
+                current_ires = self.resp[ir_slice]
+                ires, intercept, r_value, p_value, std_err, i_stderr = lin_fit_local(voltage_ires, current_ires)
+                # Storing
+                self.pul_attrs[pos]["acc_res"] = np_abs(voltage_pulse / c_diff) * 1000  # In Mega Ohms
+                self.pul_attrs[pos]["input_res"] = ires * 1000  # In Mega Ohms
+                self.pul_attrs[pos]["r_value"] = r_value
+
         self.inp_res = np.array([self.get_pulse_arr("t_o_p"), self.get_pulse_arr("input_res")]).T
         self.acc_res = np.array([self.get_pulse_arr("t_o_p"), self.get_pulse_arr("acc_res")]).T
 
@@ -670,7 +731,6 @@ class EvtPro(Analyzer):
                     rel_slope_pos = crossing_point(flipud(self.der_peaks[max_slope_region]))
                     slope_value = flipud(self.derivative[max_slope_region])[rel_slope_pos]
                     slope_time = flipud(self.time[max_slope_region])[rel_slope_pos]
-                    # slope_peak_diff = self.time[evt_pos] - flipud(self.time[max_slope_region])[rel_slope_pos]
                     match self.direction:
                         case -1:  # negative going
                             if not max_slope < slope_value:
@@ -738,7 +798,10 @@ class EvtPro(Analyzer):
                     prev_pos = evt_pos  # previous peak position
                     evt_pos = next_pos
                 else:
-                    print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected ({evt_pos - msp_p=}, No slope found.)")
+                    print(
+                            f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected ({evt_pos - msp_p=}, No slope found.) "
+                            f"{cond_slope_range = }  {cond_max_slope = }"
+                            )
                     prev_pos = evt_pos  # previous peak position
                     evt_pos = next_pos
             elif evt_val and evt_pos == 0 and prev_pos == 0:
@@ -786,16 +849,10 @@ class EvtPro(Analyzer):
                 interference_pos = next_pos_start
             # To determine if the interference is inside the region of interest
             if interference_pos < evt_pos + a_p:
+                print(f"There was an interference in the event {self.time[evt_pos]:12.4f}")
                 end_roi_pos = interference_pos
             else:
                 end_roi_pos = evt_pos + a_p
-            # if end_roi_pos < evt_pos + a_p:  # delete me after, just for testing purposes
-            #     print(
-            #             f"{self.time[evt_pos]=:4.4f}  "
-            #             f"{self.time[end_roi_pos]=:4.4f}  "
-            #             f"{self.time[end_roi_pos] - self.time[evt_pos]=:4.4f}"
-            #             )
-
             # Slice for the region of interest
             roi_slice = slice(
                     evt_pos - self.events_attrs[evt_pos]["start_pos_delta"] - baseline_points,
@@ -872,6 +929,69 @@ class EvtPro(Analyzer):
         self._event_sections(t_aft, baseline_time, zp_to_pp, peak_to_peak, max_rise_time)
 
     @timing
+    def identify_evoked(
+            self,
+            pp1_r1=1.0, pp1_r2=1.08, pp1_artifact=0.002,
+            pp2_r1=2.0, pp2_r2=2.08, pp2_artifact=0.002,
+            search_resp=0.01
+            ):
+        delta_pos_p1r1 = vtp(pp1_r1, self.t_delta)
+        delta_pos_p1r2 = vtp(pp1_r2, self.t_delta)
+        delta_pos_p1ar = vtp(pp1_artifact, self.t_delta)
+        delta_pos_p2r1 = vtp(pp2_r1, self.t_delta)
+        delta_pos_p2r2 = vtp(pp2_r2, self.t_delta)
+        delta_pos_p2ar = vtp(pp2_artifact, self.t_delta)
+        delta_search = vtp(search_resp, self.t_delta)
+
+        mask_p1r1 = np.zeros_like(self.pulses_peaks)
+        mask_p1r2 = np.zeros_like(self.pulses_peaks)
+        mask_p2r1 = np.zeros_like(self.pulses_peaks)
+        mask_p2r2 = np.zeros_like(self.pulses_peaks)
+        for pos, value in enumerate(self.pulses_peaks):
+            if value:
+                slice_p1r1 = slice(pos + delta_pos_p1r1 + delta_pos_p1ar, pos + delta_pos_p1r1 + delta_search)
+                mask_p1r1[slice_p1r1] = 1
+                slice_p1r2 = slice(pos + delta_pos_p1r2 + delta_pos_p1ar, pos + delta_pos_p1r2 + delta_search)
+                mask_p1r2[slice_p1r2] = 1
+                slice_p2r1 = slice(pos + delta_pos_p2r1 + delta_pos_p1ar, pos + delta_pos_p2r1 + delta_search)
+                mask_p2r1[slice_p2r1] = 1
+                slice_p2r2 = slice(pos + delta_pos_p2r2 + delta_pos_p1ar, pos + delta_pos_p2r2 + delta_search)
+                mask_p2r2[slice_p2r2] = 1
+
+        evts_attrs_copy = copy.deepcopy(self.events_attrs)
+
+        # plt.figure()
+        # plt.plot(self.time, mask)
+        # plt.plot(self.time, self.pulses_peaks)
+        # plt.title("Testing, delete me after")
+        # plt.show(block=False)
+
+        plt.figure()
+        for evt_pos in evts_attrs_copy.keys():
+            # if mask_p1r1[evt_pos]:
+            #     plt.plot(
+            #             self.events_attrs[evt_pos]["t_segm"] + self.events_attrs[evt_pos]["t_o_p"],
+            #             self.events_attrs[evt_pos]["r_segm"], "r"
+            #             )
+            # elif mask_p1r2[evt_pos]:
+            #     plt.plot(
+            #             self.events_attrs[evt_pos]["t_segm"] + self.events_attrs[evt_pos]["t_o_p"],
+            #             self.events_attrs[evt_pos]["r_segm"], "b"
+            #             )
+            if mask_p2r1[evt_pos]:
+                plt.plot(
+                        self.events_attrs[evt_pos]["t_segm"] + self.events_attrs[evt_pos]["t_o_p"],
+                        self.events_attrs[evt_pos]["r_segm"], "k"
+                        )
+            elif mask_p2r2[evt_pos]:
+                plt.plot(
+                        self.events_attrs[evt_pos]["t_segm"] + self.events_attrs[evt_pos]["t_o_p"],
+                        self.events_attrs[evt_pos]["r_segm"], "g"
+                        )
+        plt.title(f"Testing, delete after, PP1R1")
+        plt.show(block=False)
+
+    @timing
     def get_alig(self, alignment='p'):
         t_o_p = 0  # time of peak
         evts_attrs_copy = copy.deepcopy(self.events_attrs)
@@ -885,7 +1005,7 @@ class EvtPro(Analyzer):
                     t_o_p = self.events_attrs[evt_pos]["t_o_s"]
             t_segm = self.events_attrs[evt_pos]["t_segm"]
             # Shifting for correct alignment
-            t_segm = np.round(t_segm - t_o_p, decimals=4)
+            t_segm = np.round(t_segm - t_o_p, decimals=8)
             self.events_attrs[evt_pos]["t_o_p"] = t_o_p  # time of peak value{
             self.events_attrs[evt_pos]["t_segm"] = t_segm
 
@@ -954,7 +1074,6 @@ class EvtPro(Analyzer):
     def get_frequencies(self):
         # inst_freqs = np.append([0.0], 1.0 / np.diff(self.get_arr("t_o_p")))  # Just for compatibility
         inst_freqs = [np.nan] + list(1.0 / np.diff(self.get_arr("t_o_p")))
-        # print(f"{inst_freqs=}")
         for evt_pos, r_ifreq in zip(self.events_attrs, inst_freqs):
             self.events_attrs[evt_pos]["r_ifreq"] = r_ifreq
 
@@ -987,8 +1106,6 @@ class EvtPro(Analyzer):
         local_exp_fit = exp_fit  # Local assignment for fast lookup on local scope
         local_mse = mse  # Local assignment for fast lookup on local scope
 
-        # plt.figure(figsize=(5, 2.5))  # Delete
-
         for evt_pos in evts_attrs_copy.keys():
             r_segm = self.events_attrs[evt_pos]["r_segm"]
             t_segm = self.events_attrs[evt_pos]["t_segm"]
@@ -1010,7 +1127,6 @@ class EvtPro(Analyzer):
             # Fitting assessment
             fit_region_restricted = slice(peak_pos + pos_fit_start, peak_pos + ds_end)
             r_s_short = smoothed_resp[fit_region_restricted]
-            # t_short = t_segm[fit_region_restricted] - t_segm[peak_pos + pos_fit_start]
             t_short = t_segm[fit_region_restricted]
             if ds_end == 0 or r_s_short.size == 0 or r_s_short.size != t_short.size:
                 print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected {r_s_short.size=} {t_short.size=}")
@@ -1025,7 +1141,7 @@ class EvtPro(Analyzer):
             r_short = r_segm[fit_region_restricted]
             mse_fit = local_mse(
                     r_short,
-                    fit_pk0 * np.exp((t_short - t_segm[peak_pos + pos_fit_start]) / fit_t0) + fit_i_0
+                    exp_decay((t_short - t_segm[peak_pos + pos_fit_start]), fit_i_0, fit_pk0, fit_t0)
                     )
             normal_mse_fit = mse_fit / self.events_attrs[evt_pos]["amplitude"]
             # Conditions for acceptance
@@ -1041,24 +1157,6 @@ class EvtPro(Analyzer):
                 self.events_attrs[evt_pos]["r_decay"] = pearson_r
                 self.events_attrs[evt_pos]["mse_fit"] = mse_fit
 
-                # plt.figure(figsize=(5, 2.5))  # Delete
-                # plt.rcParams.update({'font.size': 8})
-                # plt.axhline(0.0, color="k", linestyle='--')  # Delete
-                # plt.axhline(fit_i_0, color="b", linestyle='--')  # Delete
-                # plt.plot(t_segm, r_segm, "r")  # Delete
-                # label_tmp = f"{pearson_r=:.4f} {mse_fit=:.4f} {normal_mse_fit=:.4f}"
-                # t_peak_end = t_segm[peak_pos + pos_fit_start:]
-                # t_start = t_segm[peak_pos + pos_fit_start]
-                # plt.plot(
-                #         t_peak_end,
-                #         fit_pk0 * np.exp((t_peak_end - t_start) / fit_t0) + fit_i_0,
-                #         "b:",
-                #         label=label_tmp
-                #         )  # Delete
-                # plt.title(f"Testing, delete after using it {len(self.events_attrs)=}")  # Delete
-                # plt.legend()  # Delete
-                # plt.show(block=False)  # Delete
-
             else:
                 print(
                         f"{evt_pos} {self.time[evt_pos]:12.3f}[s] rejected "
@@ -1067,9 +1165,6 @@ class EvtPro(Analyzer):
                         f"{direction_condition} {fit_pk0=:3.5f} {n_limit=:3.5f}  {std=:3.5f}  {n_limit*std=:3.5f}) "
                         )
                 self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
-
-        # plt.title(f"Testing, delete after using it {len(self.events_attrs)=}")  # Delete
-        # plt.show(block=False)  # Delete
 
         print(f" Accepted events: {len(self.events_attrs)}, Rejected: {len(evts_attrs_copy) - len(self.events_attrs)}")
 
@@ -1102,16 +1197,20 @@ class EvtPro(Analyzer):
             print(f"No events detected!!")
 
     @timing
-    def ps_nsfa(self, fit_start=0.001, fit_end=0.01, n_limit=1.0, peak_radius=0.0
-                ):
+    def ps_nsfa(
+            self, fit_start=0.001, fit_end=0.01, n_limit=1.0, peak_radius=0.0
+            ):
         end_pos = vtp(fit_end, self.t_delta)
         local_exp_fit = exp_fit  # Local assignment for fast lookup on local scope
-
         avg_resp = np.nanmean(self.get_arr("r_segm"), axis=0)
         avg_time = np.nanmean(self.get_arr("t_segm"), axis=0)  # to use common_time use get_extended first
+
         p_r_p = vtp(peak_radius, self.t_delta)
-        mean_peak = np.min(avg_resp)
-        mean_peak_pos = np.argmin(avg_resp)
+        p_t_p = np.argmin(avg_resp)
+        if peak_radius > 0.0:
+            mean_peak = np.nanmean(avg_resp[p_t_p - p_r_p: p_t_p + p_r_p + 1])
+        else:
+            mean_peak = avg_resp[p_t_p]
 
         mean_resp_diff_pow2 = []
         plt.figure(figsize=(3, 2.5))
@@ -1121,7 +1220,7 @@ class EvtPro(Analyzer):
             t_segm = self.events_attrs[evt_pos]["t_segm"]
             amplitude = self.events_attrs[evt_pos]["amplitude"]
             end_time = self.events_attrs[evt_pos]["end_time"]
-            if avg_time[mean_peak_pos + end_pos] <= end_time:
+            if avg_time[p_t_p + end_pos] <= end_time:
                 plt.plot(t_segm, r_segm, "r", alpha=0.3)
                 plt.plot(t_segm, avg_resp * (amplitude / mean_peak), "b", alpha=0.3)
                 plt.plot(t_segm, r_segm - avg_resp * (amplitude / mean_peak), "b", alpha=0.1)
@@ -1134,64 +1233,37 @@ class EvtPro(Analyzer):
         plt.plot(avg_time, avg_resp, "k")
 
         start_pos = vtp(fit_start, self.t_delta)
-        slice_section = slice(mean_peak_pos + start_pos, mean_peak_pos + end_pos)
+        slice_section = slice(p_t_p + start_pos, p_t_p + end_pos)
         time_section = avg_time[slice_section]
         variance_section = var_resp[slice_section]
         response_section = avg_resp[slice_section]
         fit_i_0, fit_pk0, fit_t0, pearson_r = local_exp_fit(
                 response_section,
-                time_section - avg_time[mean_peak_pos + start_pos],
-                # time_section,
+                time_section - avg_time[p_t_p + start_pos],
                 self.direction
                 )
         extra_resp_made = np.linspace(
                 fit_i_0 - 0.1,
                 np.round(
-                    fit_pk0 * np.exp((time_section[0] - avg_time[mean_peak_pos + start_pos]) / fit_t0) + fit_i_0
-                    ).astype(int),
-                # np.round(fit_pk0 * np.exp(time_section[0] / fit_t0) + fit_i_0).astype(int),
-                # np.round(np.abs(fit_pk0)).astype(int)
+                        exp_decay((time_section[0] - avg_time[p_t_p + start_pos]), fit_i_0, fit_pk0, fit_t0)
+                        ).astype(int),
                 np.round(np.abs(response_section[0])).astype(int)
                 )
-        extra_time_made = fit_t0 * np.log((extra_resp_made - fit_i_0) / fit_pk0) + avg_time[mean_peak_pos + start_pos]
-        extra_resp = fit_pk0 * np.exp((extra_time_made - avg_time[mean_peak_pos + start_pos]) / fit_t0) + fit_i_0
+        extra_time_made = fit_t0 * np.log((extra_resp_made - fit_i_0) / fit_pk0) + avg_time[p_t_p + start_pos]
+        extra_resp = exp_decay((extra_time_made - avg_time[p_t_p + start_pos]), fit_i_0, fit_pk0, fit_t0)
         plt.plot(time_section, response_section, "bo")
         plt.plot(extra_time_made, extra_resp, "go", markersize=12)
         plt.plot(
                 time_section,
-                fit_pk0 * np.exp((time_section - avg_time[mean_peak_pos + start_pos]) / fit_t0) + fit_i_0,
+                exp_decay((time_section - avg_time[p_t_p + start_pos]), fit_i_0, fit_pk0, fit_t0),
                 "g"
                 )
 
         bins = [(start <= time_section) & (time_section < end) for start, end in pairwise(np.flip(extra_time_made))]
-        binned_time = remove_nan(np.array([np.nanmean(time_section[section]) for section in bins]))
         binned_resp = remove_nan(np.array([np.nanmean(response_section[section]) for section in bins]))
         binned_var = remove_nan(np.array([np.nanmean(variance_section[section]) for section in bins]))
-        # plt.plot(binned_time, binned_resp, "ko")
-        # plt.plot(binned_time, binned_var, "ko")
-        # plt.axhline(0.0, color="k", linestyle='--')
-        # plt.axhline(fit_i_0, color="b", linestyle='--')
-        # plt.axvline(time_section[0], color="b", linestyle='--')
-        # plt.axvline(time_section[-1], color="b", linestyle='--')
-        # plt.title(f"Average and Var around the mean {self.time[0]:4.2f} {self.time[-1]:4.2f}")
-        # plt.xlim(-0.005, 0.02)  # Set x-axis limits
-        # plt.ylim(-80, 40)  # Set y-axis limits
-        # plt.show(block=False)
-
-        # plt.figure(figsize=(3, 2.5))
-        # plt.axhline(0.0, color="k", linestyle='--')
-        # plt.axvline(0.0, color="k", linestyle='--')
-        # plt.axvline(mean_peak, color="r", linestyle='--')
-        # plt.axvline(self.std * 3.0 * self.direction, color="r", linestyle='--')
-        # plt.axvline(self.std * 2.0 * self.direction, color="r", linestyle='--')
-        # plt.axvline(self.std * self.direction, color="r", linestyle='--')
         binned_resp_clean = binned_resp[binned_resp < self.std * self.direction * n_limit]  # removing background noise
         binned_var_clean = binned_var[binned_resp < self.std * self.direction * n_limit]  # removing background noise
-        # plt.plot(
-        #         binned_resp_clean,
-        #         binned_var_clean,
-        #         "ko"
-        #         )
         coefficients = parabolic_fit(
                 binned_resp_clean,
                 binned_var_clean
@@ -1209,18 +1281,43 @@ class EvtPro(Analyzer):
                 "binned_variance": binned_var_clean,
                 "#events"        : n_e
                 }
-        # plt.plot(
-        #         binned_resp,
-        #         unitary_current * binned_resp - np.power(binned_resp, 2) / channel_count,
-        #         "r:",
-        #         label=f"0:{intercept:2.1f},  i:{unitary_current:2.1f},  N:{channel_count:2.1f},  P0:{p_0:1.2f}",
-        #         )
-        # plt.axhline(intercept, color="r", linestyle='--')
-        # plt.xlim(-50, 1)  # Set x-axis limits from 0 to 6
-        # plt.ylim(-1, 40)  # Set y-axis limits from 5 to 35
-        # plt.title(f"Average and Var around the mean {self.time[0]:4.2f} {self.time[-1]:4.2f}")
-        # plt.legend(loc='upper left')
-        # plt.show(block=False)
+
+    def plot_ps_nsfa(self, axis_lim=((-10, 1), (1, 10))):
+        # Implement the plotting of current vs variance for psNSFA
+        current = self.ps_nsfa_values["binned_current"]
+        variance = self.ps_nsfa_values["binned_variance"]
+        intercept = self.ps_nsfa_values["intercept"]
+        unitary_current = self.ps_nsfa_values["i"]
+        channel_count = self.ps_nsfa_values["N"]
+        p_0 = self.ps_nsfa_values["p_0"]
+        n_e = self.ps_nsfa_values["#events"]
+        # Plotting psNSFA
+        plt.figure(figsize=(3, 2.5))
+        plt.axhline(0.0, color="k", linestyle='--')
+        plt.axvline(0.0, color="k", linestyle='--')
+        plt.axvline(self.std * 3.0 * self.direction, color="r", linestyle='--')
+        plt.axvline(self.std * 2.0 * self.direction, color="r", linestyle='--')
+        plt.axvline(self.std * self.direction, color="r", linestyle='--')
+        plt.plot(current, variance, "ko")
+        artificial_current = np.linspace(
+                0.0,
+                np.min(current),
+                np.round(np.abs(np.min(current))).astype(int)
+                )
+        label = f"0:{intercept:2.1f},i:{unitary_current:2.1f},N:{channel_count:2.1f},P0:{p_0:1.2f} {n_e}"
+        plt.plot(
+                artificial_current,
+                unitary_current * artificial_current - np.power(artificial_current, 2) / channel_count,
+                "r:",
+                label=label,
+                )
+        (x0, x1), (y0, y1) = axis_lim
+        plt.axhline(intercept, color="r", linestyle='--')
+        plt.xlim(x0, x1)  # Set x-axis limits from 0 to 6
+        plt.ylim(y0, y1)  # Set y-axis limits from 5 to 35
+        plt.title(f"Average and Var around the mean {self.time[0]:4.2f} {self.time[-1]:4.2f}")
+        plt.legend(loc='upper left')
+        plt.show(block=False)
 
     @timing
     def get_auc(self, already_adjusted=True, min_auc=0.02):
@@ -1316,5 +1413,23 @@ class EvtPro(Analyzer):
                 plt.plot(t_segm + t_o_p, b_amp + z_segm * amplitude / 4, "g")
                 plt.plot(t_segm + t_o_p, b_amp + s_segm * amplitude / 2, "b")
                 plt.plot(t_segm + t_o_p, b_amp + p_segm * amplitude, "r", linewidth=2)
-            plt.title(f"{title} {len(self.events_attrs) = }")
+            plt.title(f"{title} {len(self.events_attrs)}.")
+        plt.show(block=False)
+
+    @timing
+    def show_events_aligned(self, title):
+        # Plotting all events aligned
+        events: np.ndarray = np.concatenate(([self.common_time], self.get_arr("r_segm")), axis=0).T
+        events_num = len(events.T[1:])
+        alpha_val = 1.0 / (events_num + 1) + 0.03
+        plt.figure(figsize=(3, 2.5))
+        for event in events.T[1:]:
+            plt.plot(events.T[0], event, "k", alpha=alpha_val)
+        plt.plot(
+                np.nanmean(self.get_arr("t_segm"), axis=0),
+                np.nanmean(self.get_arr("r_segm"), axis=0),
+                "r:"
+                )
+        plt.axhline(y=0.0, color='r', linestyle='dashed')
+        plt.title(f"{title} {events_num}.")
         plt.show(block=False)

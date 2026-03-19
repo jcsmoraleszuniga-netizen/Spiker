@@ -1,14 +1,16 @@
+import gc
+
 import matplotlib.pyplot as plt
 import lib_gui as gui
 from lib_event_detection import EvtPro
-from lib_utility import make_name, make_sections, replace, file_info, manage_settings
+from lib_utility import make_name, make_sections, replace, file_info
 from typing import Optional, Any
 from copy import copy as cp_copy
 
 const = dict(
-    direction=-1,
-    pulse_length=0.75,
-)
+        direction=-1,
+        pulse_length=0.75,
+        )
 
 
 # def body(ori_inst: EvtPro, section: tuple[int, int], del_length: float = 1.0) -> EvtPro:
@@ -41,11 +43,11 @@ def main(ori_inst: EvtPro, start: int = 0, total: int = 1800, interval: int = 60
 
     const_file = file_path + script_name + "_const.json"
     # Loads the dictionary from the binary file if exists
-    const.update(manage_settings(const_file, const))
+    const.update(gui.manage_settings(const_file, const))
 
     out_name_ds = file_parent + make_name(
-        [file_name, f"{start:>0.0f}", f"{total:>0.0f}", f"{const["pulse_length"] * 1000:>0.0f}ms_cleaned"]
-    )
+            [file_name, f"{start:>0.0f}", f"{total:>0.0f}", f"{const["pulse_length"] * 1000:>0.0f}ms_cleaned"]
+            )
     print(f"{out_name_ds = }")
 
     rec = cp_copy(ori_inst)
@@ -64,6 +66,10 @@ def main(ori_inst: EvtPro, start: int = 0, total: int = 1800, interval: int = 60
     ori_inst.transfer(rec)  # Changes are stored in the original object
 
     del rec
+    # Manually trigger garbage collection
+    collected = gc.collect()
+    print(f"Garbage collector collected {collected} objects.")
+    print("Memory should now be freed (though the OS might not immediately show it).")
 
 
 if __name__ == "__main__":
