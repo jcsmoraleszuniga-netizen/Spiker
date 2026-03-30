@@ -14,6 +14,7 @@ from numpy import diff, exp, array, nanmean, std, arange, ones, sign, stack, tra
     savetxt, gradient, concatenate, ndarray, dtype, signedinteger
 from matplotlib import pyplot as plt
 from numpy._typing import _32Bit, _64Bit
+from scipy.signal import fftconvolve
 from scipy.stats import stats, linregress
 from typing import List, Tuple, Callable, Any, Optional, Iterable
 from numpy.typing import NDArray
@@ -228,7 +229,7 @@ def auto_save(arr: iter, file_name='default') -> None:
     savetxt(file_name, arr, delimiter=',')
 
 
-@timing
+# @timing
 # @njit
 def differentiate(arr: NDArray[np.floating], incr: np.floating | float) -> NDArray[np.floating]:
     return gradient(arr) / incr
@@ -556,26 +557,52 @@ def down_sample_function_t(arr, accept_mask, down_sample=10):
     # 1. Create a mask for the downsampling (every Nth element)
     # np.arange creates indices, then we check the modulo
     periodic_mask = (np.arange(len(arr)) % down_sample == 0)
-
     # 2. Combine with the accept_mask using a bitwise OR (|)
     # This keeps elements where val == 1 OR the index is a multiple of down_sample
     combined_mask = (accept_mask == 1) | periodic_mask
-
     # 3. Use boolean indexing to filter the array
     return arr[combined_mask]
 
 
+# @timing
+# def smoothing(resp, points, repetitions=1, sharpness=4):
+#     # Sharpness was tested for low weight tails
+#     # 1. Generate your kernel
+#     kernel = conv_vector(points, 'g', sharpness)
+#     # 2. Determine a safe padding length (the length of the kernel is usually plenty)
+#     pad_len = len(kernel)
+#     # 3. Pad the response with its own edge values to prevent diving to zero
+#     padded_resp = np.pad(resp, pad_len, mode='edge')
+#     if repetitions > 1:
+#         for _ in repeat(None, repetitions):
+#             # Shifting to the left self.resp = np.append(response[1:], [0])
+#             padded_resp = np.append(
+#                     # np.convolve is better for short arrays
+#                     # fftconvolve is better for long arrays
+#                     # 4. Convolve the padded array (this will be longer than your original signal)
+#                     fftconvolve(padded_resp, kernel, mode='same')[1:],
+#                     # np.convolve(padded_resp, kernel , mode='same')[1:],
+#                     [0]
+#                     )
+#     else:
+#         padded_resp = fftconvolve(padded_resp, kernel, mode='same')
+#     # 5. Slice off exactly the amount you padded to return to shape (4853,)
+#     return padded_resp[pad_len:-pad_len]
+
 @timing
 def smoothing(resp, points, repetitions=1, sharpness=4):
-    # Sharpness was tested for low weight tails
-    for _ in repeat(None, repetitions):
-        # Shifting to the left self.resp = np.append(response[1:], [0])
-        resp = np.append(
-                # np.convolve is better for short arrays
-                np.convolve(resp, conv_vector(points, 'g', sharpness), mode='same')[1:],
-                [0]
-                )
-    return resp
+    # 1. Calculate the effective points (width) for a single pass
+    # Using the property: sigma_total = sigma * sqrt(n)
+    eff_points = points * np.sqrt(repetitions)
+    # 2. Generate the single, wider kernel
+    kernel = conv_vector(eff_points, 'g', sharpness)
+    # 3. Padding logic (remains the same to prevent edge diving)
+    pad_len = len(kernel)
+    padded_resp = np.pad(resp, pad_len, mode='edge')
+    # 4. Single Convolution pass
+    result = fftconvolve(padded_resp, kernel, mode='same')
+    # 5. Slice and return
+    return result[pad_len:-pad_len]
 
 
 # @timing

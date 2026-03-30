@@ -12,6 +12,7 @@ const = dict(
     linear=False,
     baseline_start=154,
     baseline_end=874,
+    pulse_length=0.75,
 )
 
 
@@ -23,15 +24,24 @@ def body(ori_inst: EvtPro, section: tuple[int, int]) -> EvtPro:
     rec = cp_copy(ori_inst)  # Instantiation of the recordings
     rec.section(start, end)
 
+    rec_npul = cp_copy(ori_inst)  # Instantiation of the recordings
+    rec_npul.section(start, end)
+    rec_npul.find_pulses()
+    rec_npul.del_pulses(const["pulse_length"])
+
     b_s_p = np.where(rec.time == const["baseline_start"])[0][0]
     b_e_p = np.where(rec.time == const["baseline_end"])[0][0]
-    base = copy.deepcopy(rec.resp[b_s_p:b_e_p])
-    b_time = copy.deepcopy(rec.time[b_s_p:b_e_p])
+
+    base_resp = copy.deepcopy(rec_npul.resp[b_s_p:b_e_p])
+    base_time = copy.deepcopy(rec_npul.time[b_s_p:b_e_p])
     # Adjusts the shift in the response. Can be constant (linear=False) or linear (linear=True)
     if const["linear"]:
-        rec.time, rec.resp = remove_shift(np.array([b_time, base]), np.array([rec.time, rec.resp]))
+        rec.time, rec.resp = remove_shift(
+                np.array([base_time, base_resp]),
+                np.array([rec.time, rec.resp])
+                )
     else:
-        rec.resp -= np.average(base)
+        rec.resp -= np.average(base_resp)
 
     return rec
 

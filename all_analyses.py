@@ -7,6 +7,7 @@ from lib_gui import AnalysisSelector
 from lib_utility import timing
 import cm_ps_events as ce
 import cm_resistance as rr
+import cm_i_v as iv
 import cm_area_peak as cap
 import cm_filter as cf
 import cm_cleaner as cl
@@ -27,6 +28,7 @@ def main() -> None:
             "Response filtering"                : cf.main,
             "Shift correction"                  : sc.main,
             "Resistance analysis"               : rr.main,
+            "I-V analysis"                      : iv.main,
             "Event detection and analysis"      : ce.main,
             "Remove control pulses"             : cl.main,
             "Down sampling"                     : cr.main,

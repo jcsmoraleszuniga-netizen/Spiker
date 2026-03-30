@@ -4,7 +4,7 @@ from lib_event_detection import EvtPro
 from lib_utility import get_previous_folder, load_dict, save_dict, save_previous_folder
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QDialog, QLabel, QLineEdit, QPushButton,
+    QApplication, QHBoxLayout, QSpinBox, QWidget, QDialog, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QMessageBox, QGridLayout, QListWidget, QListWidgetItem,
     QInputDialog, QCheckBox, QFileDialog, QScrollArea
     )
@@ -71,29 +71,50 @@ class AnalysisSelector(QWidget):
 
     def __init__(self, title, programs_dict):
         super().__init__()
+        self.location = 0
         self.original = None
         self.title = title
         self.programs_dict = programs_dict
         self.checkboxes = []
+
+        # --- NEW: Initialize the location selector ---
+        self.location_spinbox = QSpinBox()
+        self.location_spinbox.setMinimum(0)  # Starts from 0
+        self.location_spinbox.setValue(0)  # Default value
+        # Optional: self.location_spinbox.setMaximum(99) # Set a max if needed
+
         self.select_file_button = QPushButton("Select ABF File")
         self.select_file_button.clicked.connect(self.select_file)
         self.run_analysis_button = QPushButton("Run analysis")
         self.run_analysis_button.clicked.connect(self.run_analyses)
         self.status_label = QLabel("")
         self.init_ui()
-        self.select_file()
+        # self.select_file()
 
     def init_ui(self):
         self.setWindowTitle(self.title)
+
+        layout = QVBoxLayout()
+
         for checkbox_text, program in self.programs_dict.items():
             print(f"{checkbox_text = }")
             self.checkboxes.append(QCheckBox(checkbox_text))
-        layout = QVBoxLayout()
+
         for checkbox in self.checkboxes:
             layout.addWidget(checkbox)
+
+        # --- NEW: Add the spinbox to the layout ---
+        # Using a horizontal layout just for the label and spinbox makes it look cleaner
+        location_layout = QHBoxLayout()
+        location_layout.addWidget(QLabel("Location (Channel):"))
+        location_layout.addWidget(self.location_spinbox)
+        layout.addLayout(location_layout)
+
+        # Add buttons and status label
         layout.addWidget(self.select_file_button)
         layout.addWidget(self.run_analysis_button)
         layout.addWidget(self.status_label)
+
         self.setLayout(layout)
 
     def select_file(self):
@@ -105,7 +126,12 @@ class AnalysisSelector(QWidget):
             file_path, _ = open_file_dialog(self, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
             if file_path:
                 save_previous_folder(os.path.dirname(file_path), self.title)
-                self.original = EvtPro(file_path, True)
+
+                # --- NEW: Fetch the current integer value from the UI ---
+                self.location = self.location_spinbox.value()
+
+                # Pass self.location to EvtPro
+                self.original = EvtPro(file_path, True, self.location)
                 show_plot(self.original, title="Total response.")
                 print(f"{self.original = }")
         except Exception as e:

@@ -2,21 +2,19 @@ import copy
 import warnings
 from itertools import pairwise, repeat
 from typing import List, Any
-from numba import njit
 from numpy import ndarray, dtype, flipud
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
 
 from lib_utility import (
-    down_sample_function_t, exp_decay, exp_fit, lin_fit, parabolic_fit, remove_nan, vtp, conv_vector, differentiate,
+    down_sample_function_t, exp_decay, exp_fit, lin_fit, parabolic_fit, remove_nan, vtp, differentiate,
     find_over_threshold,
     find_peaks,
     crossing_point, extender, apply_by, mse, timing, prev_change, down_sample_function, smoothing, reset_array,
     remove_shift, file_info, calculate_area, correct_bound
     )
 from copy import copy as cp_copy
-from scipy.signal import fftconvolve
 from scipy import fft
 from matplotlib.ticker import FuncFormatter
 
@@ -51,7 +49,7 @@ def plot_rec(rec, der, title="No Title.", values=(0.0, 0.0), mode="full", factor
             plt.plot(rec.time, rec.resp)
         case "derivative":
             plt.plot(rec.time, rec.resp, "k")
-            plt.plot(der.time, der.resp * rec.t_delta, "r")
+            plt.plot(der.time, der.resp * der.t_delta, "r")
             plt.plot(rec.time, rec.peak_noise, "k:")
             plt.plot(der.time, der.peak_noise * der.t_delta, "r:")
         case "full":
@@ -94,36 +92,51 @@ class base:
 class abf_numpy(ABF, base):
     """Transforms ABF files to a numpy inheriting class"""
 
-    def __init__(self, path_to_file, initialize=True):
+    def __init__(self, path_to_file, initialize=True, location=0):
         super().__init__(path_to_file)
         print(f"Initializing {self = }")
         self.mode = "continuous"
         if initialize:
-            self._initialize()
+            self._initialize(location)
 
     @timing
-    def _get_resp(self, location=0):
+    def _get_resp(self, location=0):  # TODO URGENT modify this to be selected at all_analysis or the analysis
         self.resp = self.data[location]
-        print(f"{self.resp = }")
+        # print(f"{self.resp = }")
+
+    # @timing
+    # def _get_time(self):
+    #     self.setSweep(0)
+    #     time = self.sweepX
+    #     self.t_delta: np.floating = np.round(self.sweepX[1] - self.sweepX[0], decimals=8)  # time increment
+    #     print(f"{self.t_delta = }")
+    #     cont_time = [(time := self.sweepX + (time[-1] + self.t_delta)) for _ in repeat(None, self.sweepCount - 1)]
+    #     cont_time.insert(0, self.sweepX)
+    #     self.time = np.array(tuple(cont_time)).flatten()
 
     @timing
     def _get_time(self):
         self.setSweep(0)
-        time = self.sweepX
-        self.t_delta: np.floating = np.round(self.sweepX[1] - self.sweepX[0], decimals=8)  # time increment
+        self.t_delta: np.floating = np.round(self.sweepX[1] - self.sweepX[0], decimals=8)
         print(f"{self.t_delta = }")
-        cont_time = [(time := self.sweepX + (time[-1] + self.t_delta)) for _ in repeat(None, self.sweepCount - 1)]
-        cont_time.insert(0, self.sweepX)
-        self.time = np.array(tuple(cont_time)).flatten()
+        # RAM FIX: Generate the continuous time directly in one shot
+        total_points = len(self.sweepX) * self.sweepCount
+        self.time = np.arange(total_points) * self.t_delta
+
+
+    # @timing
+    # def _get_cdac(self):
+    #     sweep_dac = self.sweepC
+    #     self.cdac = np.array([sweep_dac for _ in repeat(None, self.sweepCount)]).flatten()
 
     @timing
     def _get_cdac(self):
-        sweep_dac = self.sweepC
-        self.cdac = np.array([sweep_dac for _ in repeat(None, self.sweepCount)]).flatten()
+        # RAM FIX: Use np.tile to repeat the array memory-efficiently
+        self.cdac = np.tile(self.sweepC, self.sweepCount)
 
     @timing
-    def _initialize(self):
-        self._get_resp()
+    def _initialize(self, location):
+        self._get_resp(location)
         self._get_time()
         self._get_cdac()
 
@@ -160,7 +173,7 @@ class loadRecord(base):
     """Loads files and perform basic data manipulation"""
     instance_number = 0
 
-    def __init__(self, path_to_file, initialize=True):
+    def __init__(self, path_to_file, initialize=True, location=0):
         super().__init__()
         loadRecord.instance_number += 1
         self._instance_number = loadRecord.instance_number
@@ -169,7 +182,7 @@ class loadRecord(base):
 
         if path_to_file.lower().endswith(".abf"):
             print(f"Using {abf_numpy = }")
-            self.data_object = abf_numpy(path_to_file, initialize)
+            self.data_object = abf_numpy(path_to_file, initialize, location)
         elif path_to_file.lower().endswith(".csv"):
             print(f"Using {csv_numpy = }")
             self.data_object = csv_numpy(path_to_file, initialize)
@@ -313,8 +326,8 @@ class loadRecord(base):
 class Fourier(loadRecord):
     """Apply Fourier analysis to the recordings"""
 
-    def __init__(self, path_to_file, initialize=True):
-        super().__init__(path_to_file, initialize)
+    def __init__(self, path_to_file, initialize=True, location=0):
+        super().__init__(path_to_file, initialize, location)
         self.fft_series = np.array([])
         self.fft_domain = np.array([])
         self.freq_increment = 0
@@ -331,7 +344,6 @@ class Fourier(loadRecord):
 
     @timing
     def get_fft(self, component='resp'):
-        print(f"{component = }  delete me after using...")
         match component:
             case 'resp':
                 option = self.resp
@@ -341,7 +353,6 @@ class Fourier(loadRecord):
                 option = self.cdac
             case _:
                 option = None
-        print(f"{option = }  delete me after using...")
         self._get_fft_series(option)
         self._get_fft_domain()
 
@@ -363,19 +374,58 @@ class Fourier(loadRecord):
                 fft_series[f_pos - w_pos: f_pos + w_pos + 1] *= attenuation
         self.fft_series = fft_series
 
+    # @timing
+    # def fft_plot(self, title="Theoretical FFT"):
+    #     # print(f"A phase")
+    #     print(f"{self.fft_domain = }  {(1 / self.t_delta) = }  {self.t_delta = }")
+    #     f_r_theoretical = self.fft_domain * (1 / self.t_delta)  # Restores the proportions
+    #     f_s_theoretical = 2 * np.abs(self.fft_series) / len(self.time)  # Restores the proportions
+    #     # print(f"{f_r_theoretical = }")
+    #     # print(f"{f_s_theoretical = }")
+    #     # print(f"B phase")
+    #     plt.figure()
+    #     plt.title(title)
+    #     plt.plot(f_r_theoretical, f_s_theoretical, linewidth=0.05)
+    #     # print(f"C phase")
+    #     plt.axhline()
+    #     plt.yscale('log', base=np.e)
+    #     two_decimal_lambda_formatter = FuncFormatter(lambda x, pos: f"{x:.3f}")
+    #     plt.gca().yaxis.set_major_formatter(two_decimal_lambda_formatter)
+    #     plt.axhline(y=10, color='r', linestyle='dashed', label="10 [pA]")
+    #     plt.axhline(y=0.0001, color='k', linestyle='dashed', label="0.0001 [pA]")
+    #     plt.xlabel("Frequencies [Hz]")
+    #     plt.ylabel("Amplitude (Log Scale)")
+    #     plt.legend(loc="upper right")
+    #     plt.grid(True, which="both", ls="-", lw=0.5)  # Add a grid for better readability on log scales
+    #     plt.show(block=False)
+
     @timing
-    def fft_plot(self, title="Theoretical FFT"):
-        print(f"A phase")
+    def fft_plot(self, title="Theoretical FFT", max_plot_points=500000):
         print(f"{self.fft_domain = }  {(1 / self.t_delta) = }  {self.t_delta = }")
-        f_r_theoretical = self.fft_domain * (1 / self.t_delta)  # Restores the proportions
-        f_s_theoretical = 2 * np.abs(self.fft_series) / len(self.time)  # Restores the proportions
-        print(f"{f_r_theoretical = }")
-        print(f"{f_s_theoretical = }")
-        print(f"B phase")
+        # --- RAM FIX 1: In-Place Array Math ---
+        f_r_theoretical = self.fft_domain * (1.0 / self.t_delta)
+        # Calculate absolute values (creates 1 new array instead of 3)
+        f_s_theoretical = np.abs(self.fft_series)
+        # Apply scaling IN-PLACE. This modifies the existing array without using extra RAM.
+        scale_factor = 2.0 / len(self.time)
+        f_s_theoretical *= scale_factor
+        # --------------------------------------
+        # --- RAM FIX 2: Matplotlib Decimation ---
+        # Plotting millions of points kills Matplotlib.
+        # If the array is huge, we slice it to skip points just for the visual plot.
+        # (The actual math data remains untouched).
+        if len(f_r_theoretical) > max_plot_points:
+            step = len(f_r_theoretical) // max_plot_points
+            plot_x = f_r_theoretical[::step]
+            plot_y = f_s_theoretical[::step]
+        else:
+            plot_x = f_r_theoretical
+            plot_y = f_s_theoretical
+        # ----------------------------------------
         plt.figure()
         plt.title(title)
-        plt.plot(f_r_theoretical, f_s_theoretical, linewidth=0.05)
-        print(f"C phase")
+        # Plot the optimized arrays
+        plt.plot(plot_x, plot_y, linewidth=0.05)
         plt.axhline()
         plt.yscale('log', base=np.e)
         two_decimal_lambda_formatter = FuncFormatter(lambda x, pos: f"{x:.3f}")
@@ -385,15 +435,15 @@ class Fourier(loadRecord):
         plt.xlabel("Frequencies [Hz]")
         plt.ylabel("Amplitude (Log Scale)")
         plt.legend(loc="upper right")
-        plt.grid(True, which="both", ls="-", lw=0.5)  # Add a grid for better readability on log scales
+        plt.grid(True, which="both", ls="-", lw=0.5)
         plt.show(block=False)
 
 
 class Analyzer(Fourier):
     """Analyzes the recordings"""
 
-    def __init__(self, path_to_file="", initialize=True):
-        super().__init__(path_to_file, initialize)
+    def __init__(self, path_to_file="", initialize=True, location=0):
+        super().__init__(path_to_file, initialize, location)
         self.pul_attrs = {}  # Initialization
         self.pulses_peaks = np.array([])
         self.peak_noise = np.array([])  # Initialization
@@ -411,7 +461,6 @@ class Analyzer(Fourier):
     @timing
     def get_smooth(self, smooth_width=0.001, repetitions=1, sharpness=4):
         n_p = vtp(smooth_width, self.t_delta)
-        print(f"{smooth_width = } {self.t_delta = } {n_p = }")
         self.resp = smoothing(self.resp, n_p, repetitions, sharpness)
 
     @timing
@@ -480,14 +529,14 @@ class Analyzer(Fourier):
     def get_pk_noise(self, time_frame=0.2, n_deviations=3, resp_increment=0.5, std_increment=10, sharpness=2):
         n_p = vtp(time_frame, self.t_delta)
         # fftconvolve is better for long arrays
-        smoothed_resp = fftconvolve(self.resp, conv_vector(n_p, 'g', sharpness), mode='same')  # response
+        # smoothed_resp = fftconvolve(self.resp, conv_vector(n_p, 'g', sharpness), mode='valid')  # response
+        smoothed_resp = smoothing(self.resp, n_p, 1, sharpness)
         # Calculates the standard deviation every resp_increment
         resp_increment = {"start": self.time[0], "end": self.time[-1], "increment": resp_increment}
         std_resp = apply_by(np.std, np.array([self.time, self.resp]), resp_increment, True)
         # Selects the minimum value every std_increment
         if std_increment > self.time[-1]:
             warnings.warn(f"{std_increment = } is bigger than the time interval {self.time[-1] = }.")
-            # print(f"Warning: {std_increment = } is bigger than the time interval {self.time[-1] = }.")
             std_increment = int(self.time[-1])
         std_increment = {"start": std_resp[0][0], "end": std_resp[0][-1], "increment": std_increment}
         std_min = apply_by(np.min, std_resp, std_increment, True)
@@ -505,44 +554,25 @@ class Analyzer(Fourier):
     def get_o_thresh(self):
         self.o_thresh = find_over_threshold(self.resp, self.peak_noise, self.direction)
 
-    # @timing
-    # def get_peaks(self, search_width=0.01, shift_time=0.001):
-    #     self.get_o_thresh()
-    #     self.peaks = find_peaks(self.o_thresh, self.resp, self.direction, search_width, self.t_delta)
-    #     # This block is for removing the false positives generated by the peaks of the artifacts
-    #     if len(self.pulses_peaks):
-    #         tmp_peaks = np.copy(self.peaks)
-    #         shift = vtp(shift_time, self.t_delta)
-    #         for peak_pos, peak_value in enumerate(tmp_peaks):
-    #             shift_slice = slice(peak_pos - shift, peak_pos + shift)
-    #             length_value = len(self.pulses_peaks[shift_slice])
-    #             if length_value and peak_value and np.max(self.pulses_peaks[shift_slice]):
-    #                 self.peaks[peak_pos] = 0.0
-
     @timing
     def get_peaks(self, search_width=0.01, shift_time=0.001):
         self.get_o_thresh()
         self.peaks = find_peaks(self.o_thresh, self.resp, self.direction, search_width, self.t_delta)
-
         # Vectorized artifact removal
         # Only proceed if there are artifacts to filter against
         if np.any(self.pulses_peaks):
             shift = vtp(shift_time, self.t_delta)
-
             # 1. Identify where artifacts are (boolean array)
             has_artifact = (self.pulses_peaks != 0).astype(int)
-
             # 2. Create a "smearing" kernel
             # The slice [i-shift : i+shift] has a width of 2*shift
             # We use 'mode=same' so the window is centered on the artifact
             kernel_size = 2 * shift
             if kernel_size < 1: kernel_size = 1
             kernel = np.ones(kernel_size, dtype=int)
-
             # 3. Convolve to create a "danger zone" mask
             # This returns True wherever an artifact is within the shift distance
             artifact_mask = np.convolve(has_artifact, kernel, mode='same') > 0
-
             # 4. Zero out peaks that fall inside the danger zone
             self.peaks[artifact_mask] = 0.0
 
@@ -572,9 +602,7 @@ class Analyzer(Fourier):
                 aft_zero = crossing_point(front)
                 bef_zero = crossing_point(back)
                 if None in (aft_zero, bef_zero):
-                    # print(f"{(aft_zero, bef_zero) = }")
                     if delete_peaks:
-                        # print(f"Peak {evt_pos} deleted")
                         self.peaks[evt_pos] = 0
                 else:
                     zero_pass[evt_pos - bef_zero] = -1
@@ -665,6 +693,86 @@ class Analyzer(Fourier):
         self.acc_res = np.array([self.get_pulse_arr("t_o_p"), self.get_pulse_arr("acc_res")]).T
 
     @timing
+    def get_iv(self, beg_ar=0.02, end_ar=0.005, beg_ir=0.25, end_ir=0.750, holding=-60):
+        lin_fit_local = lin_fit
+        np_average = np.average
+        np_min = np.min
+        np_abs = np.abs
+        bas_acc = vtp(beg_ar - 0.001, self.t_delta)
+        beg_acc = vtp(beg_ar, self.t_delta)
+        end_acc = vtp(end_ar, self.t_delta)
+        beg_res = vtp(beg_ir, self.t_delta)
+        end_res = vtp(end_ir, self.t_delta)
+        voltage_pulse = None
+        voltage_ires = np.array([])
+        for pos, value in enumerate(self.pulses_peaks):
+            if value:
+                # Storing the time of the peak
+                self.pul_attrs[pos]["t_o_p"] = self.time[pos]
+                # Access resistance calculations
+                pulse_slice = slice(pos + end_acc, pos + beg_acc)
+                pulse_base_slice = slice(pos - beg_acc, pos - end_acc)
+                if voltage_pulse is None:
+                    voltage_pulse = np_average(self.cdac[pulse_slice]) - np_average(self.cdac[pulse_base_slice])
+                current_acc = self.resp[pos - beg_acc:pos + end_acc]
+                base_current = np_average(current_acc[:bas_acc])
+                c_diff = base_current - np_min(current_acc)
+                # Input resistance calculations and fitting
+                ir_slice = slice(pos + beg_res, pos + end_res)
+                if len(voltage_ires) == 0:
+                    voltage_ires = self.cdac[ir_slice]
+                current_ires = self.resp[ir_slice]
+                current_time = self.time[ir_slice]
+                # Storing
+                self.pul_attrs[pos]["acc_res"] = np_abs(voltage_pulse / c_diff) * 1000  # In Mega Ohms
+                self.pul_attrs[pos]["iv_res"] = current_ires
+                # self.pul_attrs[pos]["iv_res_smooth"] = smoothing(current_ires, n_p, 1, 4)
+                self.pul_attrs[pos]["iv_time"] = current_time
+
+        iv_iter = tuple(
+                zip(
+                        self.get_pulse_arr("iv_time"),
+                        self.get_pulse_arr("iv_res"),
+                        self.get_pulse_arr("acc_res"),
+                        )
+                )
+        base_resp = iv_iter[0]
+
+        plt.figure()
+        plt.axhline(0.0, color="k", linestyle='--')
+        plt.plot(self.time, self.resp, "r")
+        for curr in iv_iter:
+            plt.plot(curr[0], base_resp[1], "g")
+            plt.plot(curr[0], curr[1] - base_resp[1], "b")
+            plt.plot(curr[0], np.zeros_like(voltage_ires) + curr[2], "k")
+            plt.plot(curr[0], np.zeros_like(voltage_ires) + base_resp[2], "g")
+        plt.title(f"Pulse difference.")
+        plt.show(block=False)
+
+        fig, ax = plt.subplots()
+        n_p = vtp(0.002, self.t_delta)
+        i = (len(iv_iter)-1)*10
+        for curr in reversed(iv_iter):
+            plt.plot(
+                    voltage_ires + holding,
+                    smoothing(curr[1] - base_resp[1], n_p, 1, 4),
+                    label=f"{i}[s]",
+                    # alpha=0.75
+                    )
+            i -= 10
+        ax.spines['left'].set_position('zero')
+        ax.spines['bottom'].set_position('zero')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.set_xlabel('Voltage [mV]', loc='right')  # 'loc' can be 'left', 'center', or 'right'
+        ax.set_ylabel('Current [pA]', loc='top', rotation=0)  # 'loc' can be 'bottom', 'center', or 'top'
+        ax.xaxis.set_ticks_position('bottom')
+        ax.yaxis.set_ticks_position('left')
+        plt.legend()
+        plt.title(f"I-V Graph.")
+        plt.show(block=False)
+
+    @timing
     def get_pulse_arr(self, name):
         return np.array([values[name] for values in self.pul_attrs.values()])
 
@@ -672,8 +780,8 @@ class Analyzer(Fourier):
 class EvtPro(Analyzer):
     """Event detection class"""
 
-    def __init__(self, path_to_file="", initialize=True):
-        super().__init__(path_to_file, initialize)
+    def __init__(self, path_to_file="", initialize=True, location=0):
+        super().__init__(path_to_file, initialize, location)
         self.events_attrs = {}
         self.default_event = {
                 "slope"           : None,  # Rise-slope value
@@ -706,113 +814,208 @@ class EvtPro(Analyzer):
         self._events_positions = np.array([])  # Initialization
         self.common_time = np.array([])  # Initialization
 
+    # @timing
+    # def _select_events(self, slope_peak_time, max_slope):
+    #     initial_msp_p: int = vtp(slope_peak_time, self.t_delta)
+    #     prev_pos: int = 0  # previous peak position, initialization value
+    #     evt_pos: int = 0  # current peak position, initialization value
+    #     self.events_attrs = {}
+    #     peaks_copy = copy.deepcopy(self.peaks)
+    #     last_peak = len(peaks_copy)
+    #     for next_pos, evt_val in enumerate(peaks_copy):
+    #         # Constraints: evt_val > 0 and evt_pos > 0
+    #         # Peaks must be separated by at least peak_to_peak
+    #         if (evt_val and next_pos > evt_pos > prev_pos) or (next_pos == last_peak - 1):
+    #             # Must be 1 peak-slope before of the peak-amplitude
+    #             if evt_pos - prev_pos < initial_msp_p:  # peak-slope must be between two peaks
+    #                 msp_p = evt_pos - prev_pos
+    #             else:
+    #                 msp_p = initial_msp_p
+    #             cond_slope_range = evt_pos - msp_p > 0.0 and evt_pos + 1 - (evt_pos - msp_p) > 0.0
+    #             max_slope_region = slice(evt_pos - msp_p, evt_pos + 1)  # +1 for low rate sampling recordings
+    #             cond_max_slope = np.max(self.der_peaks[max_slope_region])
+    #             if cond_slope_range and cond_max_slope:
+    #                 self.events_attrs[evt_pos] = self.default_event.copy()
+    #                 rel_slope_pos = crossing_point(flipud(self.der_peaks[max_slope_region]))
+    #                 slope_value = flipud(self.derivative[max_slope_region])[rel_slope_pos]
+    #                 slope_time = flipud(self.time[max_slope_region])[rel_slope_pos]
+    #                 match self.direction:
+    #                     case -1:  # negative going
+    #                         if not max_slope < slope_value:
+    #                             print(
+    #                                     f"{evt_pos}"
+    #                                     f" {self.time[evt_pos]:12.4f}[s] rejected ({max_slope} > {slope_value})"
+    #                                     )
+    #                             self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
+    #                             prev_pos = evt_pos  # previous peak position
+    #                             evt_pos = next_pos
+    #                             continue
+    #                     case 1:  # positive going
+    #                         if not max_slope > slope_value:
+    #                             print(
+    #                                     f"{evt_pos}"
+    #                                     f" {self.time[evt_pos]:12.4f}[s] rejected ({max_slope} < {slope_value})"
+    #                                     )
+    #                             self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
+    #                             prev_pos = evt_pos  # previous peak position
+    #                             evt_pos = next_pos
+    #                             continue
+    #                 # max slope position
+    #                 abs_slope_pos = vtp(slope_time - self.time[0], self.t_delta)
+    #                 # Looking for zero-pass rise-start location
+    #                 starting_region = slice(correct_bound(prev_pos - 1), abs_slope_pos + 1)
+    #                 if abs_slope_pos + 1 - prev_pos == 0.0:
+    #                     print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected, {abs_slope_pos + 1=} {prev_pos=}")
+    #                     self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
+    #                     prev_pos = evt_pos  # previous peak position
+    #                     evt_pos = next_pos
+    #                     continue
+    #                 zs_p = crossing_point(flipud(self.zero_pass[starting_region]))
+    #                 # Looking for zero-pass peak location
+    #                 peak_region = slice(abs_slope_pos, next_pos + 1)
+    #                 if next_pos - abs_slope_pos == 0.0:
+    #                     print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected, {next_pos=} {abs_slope_pos=}")
+    #                     self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
+    #                     prev_pos = evt_pos  # previous peak position
+    #                     evt_pos = next_pos
+    #                     continue
+    #                 zp_p = crossing_point(self.zero_pass[peak_region])
+    #                 if None in (zs_p, zp_p):
+    #                     print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected, {zs_p=} {zp_p=}")
+    #                     self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
+    #                     prev_pos = evt_pos  # previous peak position
+    #                     evt_pos = next_pos
+    #                     continue
+    #                 t_o_zs = flipud(self.time[starting_region])[zs_p]  # zero-pass rise-start time
+    #                 t_o_zp = self.time[peak_region][zp_p]  # zero-pass peak time
+    #                 self.events_attrs[evt_pos]["t_o_s"] = slope_time
+    #                 self.events_attrs[evt_pos]["slope_peak_delta"] = self.time[evt_pos] - slope_time
+    #                 self.events_attrs[evt_pos]["rise_slope_val"] = slope_value
+    #                 self.events_attrs[evt_pos]["t_o_zs"] = t_o_zs
+    #                 self.events_attrs[evt_pos]["t_o_zp"] = t_o_zp
+    #
+    #                 self.events_attrs[evt_pos]["peak_error"] = self.time[evt_pos] - t_o_zp
+    #                 self.events_attrs[evt_pos]["rise_time_peak"] = t_o_zp - t_o_zs
+    #                 self.events_attrs[evt_pos]["rise_time_der"] = self.time[evt_pos] - t_o_zs
+    #
+    #                 # Relative to peak positions
+    #                 self.events_attrs[evt_pos]["slope_pos_delta"] = evt_pos - abs_slope_pos
+    #                 self.events_attrs[evt_pos]["start_pos_delta"] = evt_pos - vtp(t_o_zs - self.time[0], self.t_delta)
+    #                 self.events_attrs[evt_pos]["peak_pos_delta"] = evt_pos - vtp(t_o_zp - self.time[0], self.t_delta)
+    #                 prev_pos = evt_pos  # previous peak position
+    #                 evt_pos = next_pos
+    #             else:
+    #                 print(
+    #                         f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected ({evt_pos - msp_p=}, No slope found.) "
+    #                         f"{cond_slope_range = }  {cond_max_slope = }"
+    #                         )
+    #                 prev_pos = evt_pos  # previous peak position
+    #                 evt_pos = next_pos
+    #         elif evt_val and evt_pos == 0 and prev_pos == 0:
+    #             evt_pos = next_pos
+    #             print(f"{next_pos=}  {evt_pos=}  {prev_pos=}")
+    #         elif evt_val and next_pos == evt_pos:
+    #             evt_pos = next_pos
+    #             print(f"{next_pos=}  {evt_pos=}  {prev_pos=}")
+    #         elif evt_val and evt_pos > 0:
+    #             print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected ({evt_pos - prev_pos=})")
+    #     print(f" Accepted events: {len(self.events_attrs)}, Rejected: {np.sum(self.peaks) - len(self.events_attrs)}")
+
     @timing
     def _select_events(self, slope_peak_time, max_slope):
         initial_msp_p: int = vtp(slope_peak_time, self.t_delta)
-        prev_pos: int = 0  # previous peak position, initialization value
-        evt_pos: int = 0  # current peak position, initialization value
         self.events_attrs = {}
-        peaks_copy = copy.deepcopy(self.peaks)
-        last_peak = len(peaks_copy)
-        for next_pos, evt_val in enumerate(peaks_copy):
-            # Constraints: evt_val > 0 and evt_pos > 0
-            # Peaks must be separated by at least peak_to_peak
-            if (evt_val and next_pos > evt_pos > prev_pos) or (next_pos == last_peak - 1):
-                # Must be 1 peak-slope before of the peak-amplitude
-                if evt_pos - prev_pos < initial_msp_p:  # peak-slope must be between two peaks
-                    msp_p = evt_pos - prev_pos
-                else:
-                    msp_p = initial_msp_p
-                cond_slope_range = evt_pos - msp_p > 0.0 and evt_pos + 1 - (evt_pos - msp_p) > 0.0
-                max_slope_region = slice(evt_pos - msp_p, evt_pos + 1)  # +1 for low rate sampling recordings
+
+        # FIX: Get indices of peaks once. This avoids looping through every sample.
+        peak_indices = np.where(self.peaks)[0]
+        num_peaks = len(peak_indices)
+
+        if num_peaks == 0:
+            print("No peaks detected.")
+            return
+
+        # We iterate through the peaks directly.
+        # To analyze peak 'i', we look at 'i-1' for the start and 'i+1' for the end.
+        for i in range(num_peaks):
+            evt_pos = peak_indices[i]
+
+            # Boundary logic:
+            # prev_pos: the end of the previous peak (or start of file)
+            # next_pos: the start of the next peak (or end of file)
+            prev_pos = peak_indices[i - 1] if i > 0 else 0
+            next_pos = peak_indices[i + 1] if i < num_peaks - 1 else len(self.time) - 1
+
+            # 1. Determine msp_p (Peak-slope distance)
+            if evt_pos - prev_pos < initial_msp_p:
+                msp_p = evt_pos - prev_pos
+            else:
+                msp_p = initial_msp_p
+
+            cond_slope_range = evt_pos - msp_p > 0.0
+            max_slope_region = slice(evt_pos - msp_p, evt_pos + 1)
+
+            # Check if the region has derivative data
+            if cond_slope_range and len(self.der_peaks[max_slope_region]) > 0:
                 cond_max_slope = np.max(self.der_peaks[max_slope_region])
-                if cond_slope_range and cond_max_slope:
+
+                if cond_max_slope:
                     self.events_attrs[evt_pos] = self.default_event.copy()
+
+                    # Slope calculations
                     rel_slope_pos = crossing_point(flipud(self.der_peaks[max_slope_region]))
                     slope_value = flipud(self.derivative[max_slope_region])[rel_slope_pos]
                     slope_time = flipud(self.time[max_slope_region])[rel_slope_pos]
+
+                    # Directional check
+                    is_rejected = False
                     match self.direction:
-                        case -1:  # negative going
-                            if not max_slope < slope_value:
-                                print(
-                                        f"{evt_pos}"
-                                        f" {self.time[evt_pos]:12.4f}[s] rejected ({max_slope} > {slope_value})"
-                                        )
-                                self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
-                                prev_pos = evt_pos  # previous peak position
-                                evt_pos = next_pos
-                                continue
-                        case 1:  # positive going
-                            if not max_slope > slope_value:
-                                print(
-                                        f"{evt_pos}"
-                                        f" {self.time[evt_pos]:12.4f}[s] rejected ({max_slope} < {slope_value})"
-                                        )
-                                self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
-                                prev_pos = evt_pos  # previous peak position
-                                evt_pos = next_pos
-                                continue
-                    # max slope position
+                        case -1:
+                            if not max_slope < slope_value: is_rejected = True
+                        case 1:
+                            if not max_slope > slope_value: is_rejected = True
+
+                    if is_rejected:
+                        print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected (slope threshold)")
+                        self.events_attrs.pop(evt_pos, None)
+                        continue
+
+                    # Rise-start and Peak location (Zero-pass)
                     abs_slope_pos = vtp(slope_time - self.time[0], self.t_delta)
-                    # Looking for zero-pass rise-start location
-                    starting_region = slice(prev_pos, abs_slope_pos + 1)
-                    if abs_slope_pos + 1 - prev_pos == 0.0:
-                        print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected, {abs_slope_pos + 1=} {prev_pos=}")
-                        self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
-                        prev_pos = evt_pos  # previous peak position
-                        evt_pos = next_pos
-                        continue
+                    starting_region = slice(max(0, prev_pos - 1), abs_slope_pos + 1)
+                    peak_region = slice(abs_slope_pos, next_pos + 1)
+
                     zs_p = crossing_point(flipud(self.zero_pass[starting_region]))
-                    # Looking for zero-pass peak location
-                    peak_region = slice(abs_slope_pos, next_pos)
-                    if next_pos - abs_slope_pos == 0.0:
-                        print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected, {next_pos=} {abs_slope_pos=}")
-                        self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
-                        prev_pos = evt_pos  # previous peak position
-                        evt_pos = next_pos
-                        continue
                     zp_p = crossing_point(self.zero_pass[peak_region])
-                    # if None in (zs_p, zp_p) or zs_p == zp_p:
-                    if None in (zs_p, zp_p):
-                        print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected, {zs_p=} {zp_p=}")
-                        self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
-                        prev_pos = evt_pos  # previous peak position
-                        evt_pos = next_pos
+
+                    if zs_p is None or zp_p is None:
+                        print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected (crossings not found)")
+                        self.events_attrs.pop(evt_pos, None)
                         continue
-                    t_o_zs = flipud(self.time[starting_region])[zs_p]  # zero-pass rise-start time
-                    t_o_zp = self.time[peak_region][zp_p]  # zero-pass peak time
-                    self.events_attrs[evt_pos]["t_o_s"] = slope_time
-                    self.events_attrs[evt_pos]["slope_peak_delta"] = self.time[evt_pos] - slope_time
-                    self.events_attrs[evt_pos]["rise_slope_val"] = slope_value
-                    self.events_attrs[evt_pos]["t_o_zs"] = t_o_zs
-                    self.events_attrs[evt_pos]["t_o_zp"] = t_o_zp
 
-                    self.events_attrs[evt_pos]["peak_error"] = self.time[evt_pos] - t_o_zp
-                    self.events_attrs[evt_pos]["rise_time_peak"] = t_o_zp - t_o_zs
-                    self.events_attrs[evt_pos]["rise_time_der"] = self.time[evt_pos] - t_o_zs
+                    # Data Assignment
+                    t_o_zs = flipud(self.time[starting_region])[zs_p]
+                    t_o_zp = self.time[peak_region][zp_p]
 
-                    # Relative to peak positions
-                    self.events_attrs[evt_pos]["slope_pos_delta"] = evt_pos - abs_slope_pos
-                    self.events_attrs[evt_pos]["start_pos_delta"] = evt_pos - vtp(t_o_zs - self.time[0], self.t_delta)
-                    self.events_attrs[evt_pos]["peak_pos_delta"] = evt_pos - vtp(t_o_zp - self.time[0], self.t_delta)
-                    prev_pos = evt_pos  # previous peak position
-                    evt_pos = next_pos
-                else:
-                    print(
-                            f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected ({evt_pos - msp_p=}, No slope found.) "
-                            f"{cond_slope_range = }  {cond_max_slope = }"
+                    # Update attributes
+                    self.events_attrs[evt_pos].update(
+                            {
+                                    "t_o_s"           : slope_time,
+                                    "slope_peak_delta": self.time[evt_pos] - slope_time,
+                                    "rise_slope_val"  : slope_value,
+                                    "t_o_zs"          : t_o_zs,
+                                    "t_o_zp"          : t_o_zp,
+                                    "peak_error"      : self.time[evt_pos] - t_o_zp,
+                                    "rise_time_peak"  : t_o_zp - t_o_zs,
+                                    "rise_time_der"   : self.time[evt_pos] - t_o_zs,
+                                    "slope_pos_delta" : evt_pos - abs_slope_pos,
+                                    "start_pos_delta" : evt_pos - vtp(t_o_zs - self.time[0], self.t_delta),
+                                    "peak_pos_delta"  : evt_pos - vtp(t_o_zp - self.time[0], self.t_delta)
+                                    }
                             )
-                    prev_pos = evt_pos  # previous peak position
-                    evt_pos = next_pos
-            elif evt_val and evt_pos == 0 and prev_pos == 0:
-                evt_pos = next_pos
-                print(f"{next_pos=}  {evt_pos=}  {prev_pos=}")
-            elif evt_val and next_pos == evt_pos:
-                evt_pos = next_pos
-                print(f"{next_pos=}  {evt_pos=}  {prev_pos=}")
-            elif evt_val and evt_pos > 0:
-                print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected ({evt_pos - prev_pos=})")
-        print(f" Accepted events: {len(self.events_attrs)}, Rejected: {np.sum(self.peaks) - len(self.events_attrs)}")
+            else:
+                print(f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected (No slope region)")
+
+        print(f" Accepted events: {len(self.events_attrs)}, Rejected: {num_peaks - len(self.events_attrs)}")
 
     @timing
     def _event_sections(self, t_aft, baseline_time, zp_to_pp, peak_to_peak=0.001, max_rise_time=0.00263):
@@ -872,13 +1075,12 @@ class EvtPro(Analyzer):
             if t_o_zs not in t_segm or t_o_zp not in t_segm or abs(peak_error) > zp_to_pp:
                 print(
                         f"{evt_pos} {self.time[evt_pos]:12.4f}[s] rejected,"
-                        f" {t_o_zs=:5.4f} {t_o_zp=:5.4f} {t_segm[0]=:5.4f}  {t_segm[-1]=:5.4f}."
+                        f" {t_segm[0]=:5.4f} {t_o_zs=:5.4f} {t_o_zp=:5.4f} {t_segm[-1]=:5.4f}."
                         f" {abs(peak_error)=:2.4f}  {zp_to_pp=}"
                         )
                 self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
                 continue
 
-            #########################################################
             rise_time_peak = self.events_attrs[evt_pos]["rise_time_peak"]
             rise_time_der = self.events_attrs[evt_pos]["rise_time_der"]
             if rise_time_peak > max_rise_time or rise_time_der > max_rise_time:
@@ -888,7 +1090,6 @@ class EvtPro(Analyzer):
                         )
                 self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
                 continue
-            #########################################################
 
             z_segm = reset_array(self.zero_pass[roi_slice], np.where(t_segm == t_o_zp)[0][0])
             z_segm[np.where(t_segm == t_o_zs)[0][0]] = -1
@@ -929,7 +1130,7 @@ class EvtPro(Analyzer):
         self._event_sections(t_aft, baseline_time, zp_to_pp, peak_to_peak, max_rise_time)
 
     @timing
-    def identify_evoked(
+    def identify_evoked(  # TODO finish this function, incomplete
             self,
             pp1_r1=1.0, pp1_r2=1.08, pp1_artifact=0.002,
             pp2_r1=2.0, pp2_r2=2.08, pp2_artifact=0.002,
@@ -1322,7 +1523,6 @@ class EvtPro(Analyzer):
     @timing
     def get_auc(self, already_adjusted=True, min_auc=0.02):
         b_amp = 0
-        # plt.figure()  # delete me
         evts_attrs_copy = copy.deepcopy(self.events_attrs)
         for evt_pos in evts_attrs_copy.keys():
             if not already_adjusted:
@@ -1356,13 +1556,6 @@ class EvtPro(Analyzer):
                         )
                 self.events_attrs.pop(evt_pos, f"{evt_pos = } not found")
                 continue
-        #     plt.axvline(self.events_attrs[evt_pos]["t_segm"][peak_pos])  # delete me
-        #     plt.plot(  # delete me
-        #             self.events_attrs[evt_pos]["t_segm"][start_pos:end_pos],
-        #             self.events_attrs[evt_pos]["r_segm"][start_pos:end_pos] - b_amp
-        #             )  # delete me
-        # plt.title("Assessing AUC , delete me after...")  # delete me
-        # plt.show(block=False)  # delete me
         print(f" Accepted events: {len(self.events_attrs)}, Rejected: {len(evts_attrs_copy) - len(self.events_attrs)}")
 
     @timing
@@ -1380,7 +1573,8 @@ class EvtPro(Analyzer):
             self.events_attrs[evt_pos]["ap_threshold"] = ap_threshold
             # t_section = self.events_attrs[evt_pos]["t_segm"][start_pos:end_pos]
             # ap_threshold_time = t_section[threshold_pos]
-            threshold_segm = reset_array(self.events_attrs[evt_pos]["p_segm"], start_pos + threshold_pos)
+            temp_p_segm = copy.deepcopy(self.events_attrs[evt_pos]["p_segm"])
+            threshold_segm = reset_array(temp_p_segm, start_pos + threshold_pos)
             self.events_attrs[evt_pos]["threshold_segm"] = threshold_segm
 
     @timing
@@ -1398,6 +1592,7 @@ class EvtPro(Analyzer):
         if show_events:
             for evt_pos in self.events_attrs:
                 t_o_p = self.events_attrs[evt_pos]["t_o_p"]
+                # r_segm = self.events_attrs[evt_pos]["r_segm"]
                 t_segm = self.events_attrs[evt_pos]["t_segm"]
                 p_segm = self.events_attrs[evt_pos]["p_segm"]
                 s_segm = self.events_attrs[evt_pos]["s_segm"]
@@ -1410,6 +1605,7 @@ class EvtPro(Analyzer):
                 if threshold_segm is not None:
                     ap_threshold = self.events_attrs[evt_pos]["ap_threshold"]
                     plt.plot(t_segm + t_o_p, b_amp + threshold_segm * (ap_threshold - b_amp), "b")
+                # plt.plot(t_segm + t_o_p, r_segm, "r")
                 plt.plot(t_segm + t_o_p, b_amp + z_segm * amplitude / 4, "g")
                 plt.plot(t_segm + t_o_p, b_amp + s_segm * amplitude / 2, "b")
                 plt.plot(t_segm + t_o_p, b_amp + p_segm * amplitude, "r", linewidth=2)

@@ -15,8 +15,8 @@ const: dict[str, Any] = dict(
         event_type="EPSC",  # AP, EPSP, EPSC, IPSP, IPSC or Calcium
         units="pA",  # Units of the responses
         direction=-1,  # Is the response going in the positive (+1) or negative direction (-1)?
-        evoked=True,  # different type of analysis depending on time locked responses
-        pair_pulse=True,  # activates pair pulse analysis. 2 pathways as default
+        evoked=False,  # different type of analysis depending on time locked responses
+        pair_pulse=False,  # activates pair pulse analysis. 2 pathways as default
         n_deviations_peak=3.0,  # threshold deviations for peaks
         n_deviations_slope=3.0,  # threshold deviations for derivative peaks
 
@@ -188,11 +188,12 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> tuple[EvtPro, EvtPro
         axis_tuple = ((const["psnsfa_x0"], const["psnsfa_x1"]), (const["psnsfa_y0"], const["psnsfa_y1"]))
         rec.plot_ps_nsfa(axis_tuple)
 
-    rec.identify_evoked(
-            const["pp1_r1"], const["pp1_r2"], const["pp1_artifact"],
-            const["pp2_r1"], const["pp2_r2"], const["pp2_artifact"],
-            const["search_resp"],
-            )
+    if const["evoked"]:
+        rec.identify_evoked(
+                const["pp1_r1"], const["pp1_r2"], const["pp1_artifact"],
+                const["pp2_r1"], const["pp2_r2"], const["pp2_artifact"],
+                const["search_resp"],
+                )
 
     rec.get_frequencies()
     rec.get_intervals()
@@ -491,4 +492,4 @@ if __name__ == "__main__":
         original = EvtPro(file_path_out, True)
         gui.show_plot(original, title="Select the time of the sections: ")
         bound: int = int(original.time[-1])
-        main(original, 0, bound, 600)
+        main(original, 0, bound, bound)
