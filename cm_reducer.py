@@ -14,8 +14,8 @@ const = dict(
         noise_smooth_frame=0.1,  # seconds, width of the average
         n_deviations_peak=3.0,  # threshold deviations for peaks
         resp_increment=0.5,
-        std_increment=10.0,
-        noise_sharpness=2,  # Acuity of the gaussian kernel
+        std_increment=60.0,
+        noise_sharpness=4,  # Acuity of the gaussian kernel
         )
 
 
@@ -31,8 +31,10 @@ def body(ori_inst: EvtPro, section: tuple[int, int]) -> EvtPro:
     print(f"{len(rec.resp) = }")
 
     if not const["with_threshold"]:
+        print(f"Using traditional reduction")
         rec.down_sample(const["down_sample"])
     elif const["with_threshold"]:
+        print(f"Using smart reduction")
         rec.get_pk_noise(
                 const["noise_smooth_frame"],
                 const["n_deviations_peak"],

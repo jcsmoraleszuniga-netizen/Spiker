@@ -1,21 +1,22 @@
 import copy
 import functools
 import json
-# import pickle
+import re
 import timeit
-from itertools import pairwise, repeat
+from itertools import pairwise
 from pathlib import Path
 from tkinter import filedialog
 import numpy as np
-from numba import njit, jit
-from numpy import diff, exp, array, nanmean, std, arange, ones, sign, stack, trapz, where, zeros, mean, median, \
+from numba import njit
+from numpy import diff, exp, array, nanmean, std, arange, ones, stack, trapz, where, zeros, mean, median, \
     percentile, \
     delete, \
     savetxt, gradient, concatenate, ndarray, dtype, signedinteger
 from matplotlib import pyplot as plt
 from numpy._typing import _32Bit, _64Bit
-from scipy.signal import fftconvolve
-from scipy.stats import stats, linregress
+from scipy.ndimage import find_objects, label
+from scipy.signal import fftconvolve, oaconvolve
+from scipy.stats import stats
 from typing import List, Tuple, Callable, Any, Optional, Iterable
 from numpy.typing import NDArray
 from scipy import optimize
@@ -25,10 +26,10 @@ def timing(function: Callable):
     @functools.wraps(function)
     def elapsed(*args):
         start = timeit.default_timer()
-        print(f"\n{function.__name__:->30}")
+        print(f"{function.__name__:->30}")
         result = function(*args)
         total_time = timeit.default_timer() - start
-        print(f"\n{function.__name__:+>40} {total_time = :.5f}")
+        print(f"{function.__name__:+>40} {total_time = :.5f}")
         return result
 
     return elapsed
@@ -45,7 +46,7 @@ def ptv(value: int | np.integer, value_increment: float | np.floating) -> float 
     return value * value_increment
 
 
-@timing
+# @timing
 @njit
 def exp_decay(
         t: NDArray[np.floating], i0: np.floating, pk0: np.floating, t0: np.floating
@@ -53,61 +54,72 @@ def exp_decay(
     return i0 + pk0 * exp(t / t0)
 
 
-@timing
+# @timing
 def exp_rise(
         t: NDArray[np.floating], top: np.floating, bott: np.floating, v50: np.floating, slope: np.floating
         ) -> NDArray[np.floating]:
     return top + (bott - top) / (1 + (v50 - t) / slope)
 
 
-@timing
+# @timing
 def linear(
         t: NDArray[np.floating], slope: np.floating, intercept: np.floating
         ) -> NDArray[np.floating]:
     return t * slope + intercept
 
 
-@timing
-def conv_vector(n_p: int, c_type: str = 'g', sharpness: int = 2) -> NDArray[np.floating]:
-    conv: NDArray[np.floating] = array([])
-    max_diff: float = 0.0006
+# @timing
+# def conv_vector(n_p: int, c_type: str = 'g', sharpness: int = 2) -> NDArray[np.floating]:
+#     conv: NDArray[np.floating] = array([])
+#     max_diff: float = 0.0006
+#     if n_p < 9:
+#         raise ValueError(f" Use a value of n_p >= 9 (minimum number of points). Try again.")
+#     else:
+#         if c_type == 'g':  # Gaussian convolution vector
+#             sd: np.floating = std(arange(n_p / sharpness))
+#             x = arange(n_p)
+#             conv = exp(-(((x - n_p / 2) / sd) ** 2) / 2) / (sd * np.sqrt(2 * np.pi))
+#             if np.abs(1 - np.sum(conv)) >= max_diff:
+#                 print(f"{n_p = }")
+#                 print(f"{sharpness = }")
+#                 print(f"{sd = }")
+#                 print(f"{x = }")
+#                 print(f"{conv = }")
+#                 print(f"{np.sum(conv) = }")
+#                 raise ValueError(
+#                         f"Vector sum is significantly different from 1: {1 - np.sum(conv) = :.6f}. Use a value of n_p >= 9. "
+#                         f"\nMaximum difference accepted for the sum is: |1 - np.sum(conv)| < {max_diff}."
+#                         )
+#         elif c_type == 'f':  # Flat convolution vector
+#             conv = ones(n_p) / n_p
+#     return conv
+
+def conv_vector(n_p: int, c_type: str = 'g', sharpness: float = 2.0) -> NDArray[np.floating]:
     if n_p < 9:
-        raise ValueError(f" Use a value of n_p >= 9 (minimum number of points). Try again.")
+        raise ValueError("Use a value of n_p >= 9 (minimum number of points). Try again.")
+
+    if c_type == 'g':  # Gaussian convolution vector
+        # Calculate standard deviation
+        sd: np.floating = np.std(np.arange(n_p / sharpness))
+
+        # FIX 1: Calculate the exact mathematical center to prevent phase shifting
+        x = np.arange(n_p)
+        center = (n_p - 1) / 2.0
+
+        # Generate the curve
+        conv = np.exp(-0.5 * ((x - center) / sd) ** 2)
+
+        # FIX 2: Force perfect normalization instead of crashing
+        conv /= np.sum(conv)
+
+    elif c_type == 'f':  # Flat (Boxcar) convolution vector
+        conv = np.ones(n_p) / n_p
+
     else:
-        if c_type == 'g':  # Gaussian convolution vector
-            sd: np.floating = std(arange(n_p / sharpness))
-            x = arange(n_p)
-            conv = exp(-(((x - n_p / 2) / sd) ** 2) / 2) / (sd * np.sqrt(2 * np.pi))
-            if np.abs(1 - np.sum(conv)) >= max_diff:
-                print(f"{n_p = }")
-                print(f"{sharpness = }")
-                print(f"{sd = }")
-                print(f"{x = }")
-                print(f"{conv = }")
-                print(f"{np.sum(conv) = }")
-                raise ValueError(
-                        f"Vector sum is significantly different from 1: {1 - np.sum(conv) = :.6f}. Use a value of n_p >= 9. "
-                        f"\nMaximum difference accepted for the sum is: |1 - np.sum(conv)| < {max_diff}."
-                        )
-        elif c_type == 'f':  # Flat convolution vector
-            conv = ones(n_p) / n_p
+        raise ValueError(f"Unknown c_type '{c_type}'. Please use 'g' or 'f'.")
+
     return conv
 
-
-# @timing
-# @njit
-# def crossing_point(
-#         arr: NDArray[np.floating]
-#         ) -> int | None:
-#     """Returns the position where the array intersect with 0.0"""
-#     sign_array: NDArray[np.floating] = sign(arr)
-#     previous = sign_array[0]
-#     for index, value in enumerate(sign_array):
-#         if value - previous != 0:
-#             return index
-#         else:
-#             previous = value
-#     return None
 
 # @timing
 # @njit
@@ -133,47 +145,101 @@ def crossing_point(arr: NDArray[np.floating]) -> int | None:
     return None
 
 
-@timing
-def find_over_threshold(  # It's faster without @njit.
+# @timing
+# def find_over_threshold(  # It's faster without @njit.
+#         response: NDArray[np.floating], threshold: NDArray[np.floating], direction: int
+#         ) -> NDArray[np.floating]:
+#     events_over_threshold: NDArray[np.floating] = array([])
+#     stacked: NDArray[np.floating] = stack((response, threshold), axis=0)
+#     if direction > 0:
+#         events_over_threshold = np.max(stacked, axis=0) - threshold
+#     elif direction < 0:
+#         events_over_threshold = np.min(stacked, axis=0) - threshold
+#     return where(np.abs(events_over_threshold) > 0, 1, 0)
+
+# @timing
+def find_over_threshold(
         response: NDArray[np.floating], threshold: NDArray[np.floating], direction: int
         ) -> NDArray[np.floating]:
-    events_over_threshold: NDArray[np.floating] = array([])
-    stacked: NDArray[np.floating] = stack((response, threshold), axis=0)
+    # RAM FIX: Replaced memory-heavy np.stack and np.max/min with direct boolean evaluation.
     if direction > 0:
-        events_over_threshold = np.max(stacked, axis=0) - threshold
+        events_over_threshold = response > threshold
     elif direction < 0:
-        events_over_threshold = np.min(stacked, axis=0) - threshold
-    return where(np.abs(events_over_threshold) > 0, 1, 0)
+        events_over_threshold = response < threshold
+    else:
+        return np.zeros_like(response)
+
+    return np.where(events_over_threshold, 1, 0)
 
 
-@timing
-@njit
+# @timing
+# @njit
 def find_peaks(
         over_threshold: NDArray[np.floating], response: NDArray[np.floating], direction: int,
-        search_width: float | np.floating, time_increment: float | np.floating
+        search_width: float | np.floating = 0.0, time_increment: float | np.floating = 0.0
         ) -> NDArray[np.floating]:
-    peaks: NDArray[np.floating] = zeros(len(over_threshold))
-    half_width: int = max(1, vtp(search_width / 2, time_increment))
-    quart_width: int = max(1, vtp(search_width / 4, time_increment))
-    for pos in range(half_width + 1, len(over_threshold)):  # In case a peak is at "0" position
+    # 1. Create the empty peaks array
+    peaks = np.zeros_like(over_threshold)
 
-        if over_threshold[pos]:
-            window = response[pos - quart_width: pos + half_width]
-            match direction:
-                case -1:
-                    if np.min(window) == response[pos]:
-                        peaks[pos - quart_width: pos + half_width] = 0
-                        peaks[pos] = 1
-                case 1:
-                    if np.max(window) == response[pos]:
-                        peaks[pos - quart_width: pos + half_width] = 0
-                        peaks[pos] = 1
-                case _:
-                    print("Wrong direction")
+    # 2. Label the contiguous sectors of 1s
+    # (Checking > 0 ensures it works even if over_threshold contains floats like 1.0)
+    labeled_array, num_features = label(over_threshold > 0)
+
+    # 3. Get the exact slice objects for every sector instantly
+    slices = find_objects(labeled_array)
+
+    # 4. Iterate through the slices and find the peak in each
+    for sl in slices:
+        if sl is None:
+            continue
+
+        # find_objects returns a tuple of slices per dimension. We just need the first one (1D).
+        sector_slice = sl[0]
+
+        # Instantly slice out the response data for this specific sector
+        sector_response = response[sector_slice]
+
+        # 5. Find the local index of the max/min within this isolated sector
+        if direction == 1:
+            local_peak_idx = np.argmax(sector_response)
+        elif direction == -1:
+            local_peak_idx = np.argmin(sector_response)
+        else:
+            print("Wrong direction")
+            return peaks
+
+        # 6. Map the local index back to the global array using the slice's start position
+        global_peak_idx = sector_slice.start + local_peak_idx
+        peaks[global_peak_idx] = 1
+
     return peaks
 
 
-@timing
+# def find_peaks(
+#         over_threshold: NDArray[np.floating], response: NDArray[np.floating], direction: int,
+#         search_width: float | np.floating, time_increment: float | np.floating
+#         ) -> NDArray[np.floating]:
+#     peaks: NDArray[np.floating] = zeros(len(over_threshold))
+#     half_width: int = max(1, vtp(search_width / 2, time_increment))
+#     quart_width: int = max(1, vtp(search_width / 4, time_increment))
+#     for pos in range(half_width + 1, len(over_threshold)):  # In case a peak is at "0" position
+#         if over_threshold[pos]:
+#             window = response[pos - quart_width: pos + half_width]
+#             match direction:
+#                 case -1:
+#                     if np.min(window) == response[pos]:
+#                         peaks[pos - quart_width: pos + half_width] = 0
+#                         peaks[pos] = 1
+#                 case 1:
+#                     if np.max(window) == response[pos]:
+#                         peaks[pos - quart_width: pos + half_width] = 0
+#                         peaks[pos] = 1
+#                 case _:
+#                     print("Wrong direction")
+#     return peaks
+
+
+# @timing
 def get_stats(arr: NDArray[np.floating]) -> Tuple[List[str], List[Any]]:
     try:
         res = stats.normaltest(arr)
@@ -200,7 +266,7 @@ def get_stats(arr: NDArray[np.floating]) -> Tuple[List[str], List[Any]]:
     return name_lst, value_lst
 
 
-@timing
+# @timing
 def find_outliers(arr: NDArray[np.floating]) -> ndarray[Any, dtype[signedinteger[Any] | dtype]]:
     q1: np.floating = percentile(arr, 25)
     q3: np.floating = percentile(arr, 75)
@@ -209,7 +275,7 @@ def find_outliers(arr: NDArray[np.floating]) -> ndarray[Any, dtype[signedinteger
     return where((arr < q1 - threshold) | (arr > q3 + threshold))[0]
 
 
-@timing
+# @timing
 def remove_outlier(array_2d: NDArray[np.floating]) -> NDArray[np.floating]:
     """Identify  the outliers in the 'y' axis of the array and then removes them with their respective 'x' values"""
     return delete(array_2d, find_outliers(array_2d.T[1]), axis=0)
@@ -232,34 +298,23 @@ def auto_save(arr: iter, file_name='default') -> None:
 # @timing
 # @njit
 def differentiate(arr: NDArray[np.floating], incr: np.floating | float) -> NDArray[np.floating]:
-    return gradient(arr) / incr
+    # np.diff is exactly f[i+1] - f[i]
+    diff = np.diff(arr) / incr
+    # Append a zero at the end to keep the array size identical and alignment correct
+    return np.append(diff, 0.0)
 
 
-@timing
+# def differentiate(arr: NDArray[np.floating], incr: np.floating | float) -> NDArray[np.floating]:
+#     return gradient(arr, incr)
+
+
+# @timing
 def opt_linear(
         x_arr: NDArray[np.floating], y_arr: NDArray[np.floating]
         ) -> tuple[ndarray | Iterable | int | float, Any, Any, Any, Any]:
     # linear: t * slope + intercept
     return optimize.curve_fit(linear, x_arr, y_arr)  # returns the parameters of the fitting
 
-
-# @timing
-# def opt_expdec(
-#         time: NDArray[np.floating], voltage: NDArray[np.floating], bounds=([- 10, 0, 0], [20, 50, 20])
-#         ) -> tuple[ndarray | Iterable | int | float, Any, Any, Any, Any]:
-#     # bounds = ([- 10, 0, 0], [20, 50, 20])  # Bounds to initialize the fitting process
-#     return optimize.curve_fit(exp_decay, time, voltage, bounds=bounds)
-
-
-# @timing
-# def extender(
-#         x_segm: NDArray[np.floating], t_segm: NDArray[np.floating], t_common: NDArray[np.floating]
-#         ) -> NDArray[np.floating]:
-#     back_segment: NDArray[np.floating] = t_common[:where(t_segm[0] == t_common)[0][0]]
-#     front_segment: NDArray[np.floating] = t_common[where(t_segm[-1] == t_common)[0][0] + 1:]
-#     extd_evt = concatenate((zeros(len(back_segment)), x_segm), axis=None)
-#     extd_evt = concatenate((extd_evt, zeros(len(front_segment))), axis=None)
-#     return extd_evt
 
 # @timing
 def extender(
@@ -283,7 +338,7 @@ def extender(
     return extd_evt
 
 
-@timing
+# @timing
 def loop(arr1: NDArray[np.floating], arr2: NDArray[np.floating]) -> NDArray[np.floating]:
     return array(
             [
@@ -294,23 +349,34 @@ def loop(arr1: NDArray[np.floating], arr2: NDArray[np.floating]) -> NDArray[np.f
             ).flatten()
 
 
-@timing
+# @timing
 def get_peaks_arr(time: NDArray[np.floating], peaks: NDArray[np.floating]) -> NDArray[np.floating]:
     return array(concatenate(([loop(time, peaks)], [loop(peaks, peaks)]), axis=0).T)
 
+
+# @timing
+# def make_sections(
+#         start: int | float = 0, total: int | float = 1800, interval: int | float = 600
+#         ) -> List[Tuple[int, int]]:
+#     start = int(start)
+#     total = int(total)
+#     interval = int(interval)
+#     points = [i for i in range(start, total + 1, interval)]
+#     return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
 
 @timing
 def make_sections(
         start: int | float = 0, total: int | float = 1800, interval: int | float = 600
         ) -> List[Tuple[int, int]]:
-    start = int(start)
-    total = int(total)
-    interval = int(interval)
-    points = [i for i in range(start, total + 1, interval)]
+    start, total, interval = int(start), int(total), int(interval)
+
+    # RAM FIX: Use the memory-efficient range object directly.
+    points = range(start, total + 1, interval)
+
     return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
 
 
-@timing
+# @timing
 def apply_by_continuous(
         function: callable,
         arr: NDArray[NDArray[np.floating]],
@@ -334,7 +400,7 @@ def apply_by_continuous(
             ).T
 
 
-@timing
+# @timing
 def apply_by_discrete(
         function: callable,
         arr: NDArray[NDArray[np.floating]],
@@ -355,7 +421,7 @@ def apply_by_discrete(
     return array(l_function).T
 
 
-@timing
+# @timing
 def apply_by(
         function: callable,
         arr: NDArray[NDArray[np.floating]],
@@ -370,7 +436,7 @@ def apply_by(
         return apply_by_discrete(function, arr, increment)
 
 
-@timing
+# @timing
 def average_by(
         arr: NDArray[NDArray[np.floating]],
         increment: dict,
@@ -381,12 +447,12 @@ def average_by(
     return apply_by(nanmean, arr, increment, continuous)
 
 
-@timing
+# @timing
 def count_ones(arr: NDArray[np.floating]) -> int:
     return np.count_nonzero(arr == 1)
 
 
-@timing
+# @timing
 def event_count(
         arr: NDArray[NDArray[np.floating]],
         increment: dict,
@@ -397,7 +463,7 @@ def event_count(
     return apply_by(len, arr, increment, continuous)
 
 
-@timing
+# @timing
 def event_pr(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDArray[np.floating]]:
     """Calculates the probability of an event for a certain increment in time.
     If no values are found in that increment then the probability is set as 0.0"""
@@ -407,23 +473,40 @@ def event_pr(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDA
     return counts
 
 
-@timing
-def intervals(increment: dict) -> NDArray[NDArray[np.floating]]:
+# @timing
+# def intervals(increment: dict) -> NDArray[NDArray[np.floating]]:
+#     ratio = increment["end"] / increment["increment"]
+#     n_times = round(ratio, 0)
+#     if n_times - ratio >= 0:
+#         tail = n_times
+#     else:
+#         tail = n_times + 1
+#     arr = [p_time for p_time in arange(0, tail * increment["increment"] + 1, increment["increment"])]
+#     if arr[0] != increment["start"]:
+#         arr[0] = increment["start"]
+#     if arr[-1] != increment["end"]:
+#         arr[-1] = increment["end"]
+#     return np.array(arr)
+
+# @timing
+def intervals(increment: dict) -> NDArray[np.floating]:
     ratio = increment["end"] / increment["increment"]
     n_times = round(ratio, 0)
-    if n_times - ratio >= 0:
-        tail = n_times
-    else:
-        tail = n_times + 1
-    arr = [p_time for p_time in arange(0, tail * increment["increment"] + 1, increment["increment"])]
-    if arr[0] != increment["start"]:
-        arr[0] = increment["start"]
-    if arr[-1] != increment["end"]:
-        arr[-1] = increment["end"]
-    return np.array(arr)
+    tail = n_times if (n_times - ratio >= 0) else n_times + 1
+
+    # RAM FIX: Generate the numpy array directly. No list comprehensions.
+    arr = np.arange(0, tail * increment["increment"] + 1, increment["increment"])
+
+    if arr.size > 0:
+        if arr[0] != increment["start"]:
+            arr[0] = increment["start"]
+        if arr[-1] != increment["end"]:
+            arr[-1] = increment["end"]
+
+    return arr
 
 
-@timing
+# @timing
 def event_fr(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDArray[np.floating]]:
     """Calculates the frequency of an event for a certain increment in time.
     If no values are found in that increment then the frequency is set as 0.0"""
@@ -435,7 +518,7 @@ def event_fr(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDA
     return counts
 
 
-@timing
+# @timing
 def event_aft(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[NDArray[np.floating]]:
     """Counts the number of events for a certain increment in time, and divides by the average of the events values.
     If no values are found in that increment then the count is set as 0.0"""
@@ -456,153 +539,283 @@ def save_plot(
         values, name_params: dict, units: str, plot_increment: dict, bins: int, func: callable, plot=True
         ) -> None:
     """Saves the data and plots it."""
+
+    # ---------------------------------------------------------
+    # 1. UPPER SAVING LOGIC (From original)
+    # ---------------------------------------------------------
     if callable(func):
         func_values = func(values, plot_increment)
         func_name = func.__name__
     else:
         func_values = values
         func_name = ""
+
     out_name = name_params["file_parent"] + make_name(
             name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"]]
             )
     out_name_mean = name_params["file_parent"] + make_name(
             name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"], func_name]
             )
+
     print(f"{out_name = }")
     print(f"{out_name_mean = }")
+
     if callable(func):
         auto_save(values.T, out_name)
         auto_save(func_values.T, out_name_mean)
     else:
         auto_save(values.T, out_name)
+
     mean_val = mean(values[1])
     median_val = median(values[1])
+
+    # ---------------------------------------------------------
+    # 2. PLOTTING & RAM CLEARING LOGIC (New)
+    # ---------------------------------------------------------
     if plot:
-        # Plotting time course of values
-        plt.figure(figsize=(3, 2.5))
         plt.rcParams.update({'font.size': 8})
-        plt.plot(values[0], values[1], "r+", label=name_params["parameter"])
-        plt.plot(
+
+        # ASYNC RAM CLEARING CALLBACK
+        def on_close(event):
+            event.canvas.figure.clear()
+            plt.close(event.canvas.figure)
+            import gc
+
+            gc.collect()
+
+        # --- Figure 1: Time Course ---
+        fig1, ax1 = plt.subplots(figsize=(3, 2.5))
+        ax1.plot(values[0], values[1], "r+", label=name_params["parameter"])
+        ax1.plot(
                 func_values[0],
                 func_values[1],
-                'bo', label=f"{func_name} {name_params["parameter"]}", alpha=0.5, markersize=10
+                'bo', label=f"{func_name} {name_params['parameter']}", alpha=0.5, markersize=10
                 )
-        plt.axhline(0, color='g', linestyle='dashed', linewidth=1)
-        plt.axhline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
-        plt.axhline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
-        plt.title(f"{name_params["analysis_type"]} time course. {len(values[1])} events.")
-        plt.legend()
+        ax1.axhline(0, color='g', linestyle='dashed', linewidth=1)
+        ax1.axhline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
+        ax1.axhline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
+        ax1.set_title(f"{name_params['analysis_type']} time course. {len(values[1])} events.")
+        ax1.legend()
+
+        fig1.canvas.mpl_connect('close_event', on_close)
+        fig1.show()
+        fig1.canvas.draw()
+
+        # --- Figure 2: Histogram ---
+        fig2, ax2 = plt.subplots(figsize=(3, 2.5))
+        ax2.hist(values[1], bins)
+        ax2.axvline(0, color='g', linestyle='dashed', linewidth=1)
+        ax2.axvline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
+        ax2.axvline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
+        ax2.set_title(f"{name_params['parameter']} ({name_params['analysis_type']}). {len(values[1])} events.")
+        ax2.legend(loc='upper right')
+
+        fig2.canvas.mpl_connect('close_event', on_close)
         plt.show(block=False)
-        # Histogram of values
-        plt.figure(figsize=(3, 2.5))
-        plt.hist(values[1], bins)
-        plt.axvline(0, color='g', linestyle='dashed', linewidth=1)
-        plt.axvline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
-        plt.axvline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
-        plt.title(f"{name_params["parameter"]} ({name_params["analysis_type"]}). {len(values[1])} events.")
-        plt.legend(loc='upper right')
-        plt.show(block=False)
+        fig2.canvas.draw()
+
+# def save_plot(
+#         values, name_params: dict, units: str, plot_increment: dict, bins: int, func: callable, plot=True
+#         ) -> None:
+#     """Saves the data and plots it."""
+#     if callable(func):
+#         func_values = func(values, plot_increment)
+#         func_name = func.__name__
+#     else:
+#         func_values = values
+#         func_name = ""
+#     out_name = name_params["file_parent"] + make_name(
+#             name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"]]
+#             )
+#     out_name_mean = name_params["file_parent"] + make_name(
+#             name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"], func_name]
+#             )
+#     print(f"{out_name = }")
+#     print(f"{out_name_mean = }")
+#     if callable(func):
+#         auto_save(values.T, out_name)
+#         auto_save(func_values.T, out_name_mean)
+#     else:
+#         auto_save(values.T, out_name)
+#     mean_val = mean(values[1])
+#     median_val = median(values[1])
+#     if plot:
+#         # Plotting time course of values
+#         plt.figure(figsize=(3, 2.5))
+#         plt.rcParams.update({'font.size': 8})
+#         plt.plot(values[0], values[1], "r+", label=name_params["parameter"])
+#         plt.plot(
+#                 func_values[0],
+#                 func_values[1],
+#                 'bo', label=f"{func_name} {name_params["parameter"]}", alpha=0.5, markersize=10
+#                 )
+#         plt.axhline(0, color='g', linestyle='dashed', linewidth=1)
+#         plt.axhline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
+#         plt.axhline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
+#         plt.title(f"{name_params["analysis_type"]} time course. {len(values[1])} events.")
+#         plt.legend()
+#         plt.show(block=False)
+#         # Histogram of values
+#         plt.figure(figsize=(3, 2.5))
+#         plt.hist(values[1], bins)
+#         plt.axvline(0, color='g', linestyle='dashed', linewidth=1)
+#         plt.axvline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
+#         plt.axvline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
+#         plt.title(f"{name_params["parameter"]} ({name_params["analysis_type"]}). {len(values[1])} events.")
+#         plt.legend(loc='upper right')
+#         plt.show(block=False)
 
 
-@timing
+def get_safe_filename(text: str) -> str:
+    """Removes illegal characters from a string so it can be a Windows/Mac filename."""
+    if not text:
+        return ""
+    # Replaces < > : " / \ | ? * with an underscore
+    return re.sub(r'[<>:"/\\|?*]', '_', text)
+
+
 def get_previous_folder(context: str = "") -> Optional[str]:
     """Retrieves the previously opened folder from a file."""
+    safe_context = get_safe_filename(context)
+    # Adding an underscore makes it cleaner: "Save to JSON__previous_folder.txt"
+    file_name = f"{safe_context}_previous_folder.txt" if safe_context else "previous_folder.txt"
+
     try:
-        with open(context + "previous_folder.txt", "r") as f:
+        with open(file_name, "r") as f:
             return f.read().strip()
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
+        # Catch OSError too! That's what actually caused your crash.
         return None
 
 
-@timing
-def save_previous_folder(folder_path: str, context: str = "") -> None:
-    """Saves the given folder path to a file."""
-    name = context + "previous_folder.txt"
-    with open(name, "w") as f:
-        f.write(folder_path)
+def save_previous_folder(folder_path: str, context: str = ""):
+    safe_context = get_safe_filename(context)
+    file_name = f"{safe_context}_previous_folder.txt" if safe_context else "previous_folder.txt"
+
+    try:
+        with open(file_name, "w") as f:
+            f.write(folder_path)
+    except Exception as e:
+        print(f"Failed to save folder history: {e}")
+
+# @timing
+# def get_previous_folder(context: str = "") -> Optional[str]:
+#     """Retrieves the previously opened folder from a file."""
+#     try:
+#         print(f"Delete me after... {context + "previous_folder.txt"}")
+#         with open(context + "previous_folder.txt", "r") as f:
+#             return f.read().strip()
+#     except FileNotFoundError:
+#         print(f"Delete me after FileNotFoundError")
+#         return None
 
 
-@timing
+# @timing
+# def save_previous_folder(folder_path: str, context: str = "") -> None:
+#     """Saves the given folder path to a file."""
+#     name = context + "previous_folder.txt"
+#     with open(name, "w") as f:
+#         f.write(folder_path)
+
+
+# @timing
 def mse(arr1, arr2) -> float:
     """Calculates minimum square error for two arrays of the same length"""
     return np.mean(np.square(arr1 - arr2))
 
 
-@timing
-# @njit
+# @timing
+# # @njit
+# def prev_change(der_test_resp: np.ndarray, prev: float = 0.0) -> np.ndarray:
+#     """
+#     Optimizes the given Python loop using NumPy for faster execution.
+#     """
+#     der_test_resp = np.array(der_test_resp)  # Convert to NumPy array if it's a list
+#     # Create a shifted array to check the previous element
+#     shifted_resp = np.concatenate(
+#             ([prev], der_test_resp[:-1])
+#             )  # prepends a zero to the array and removes the last element.
+#     # Find the indices where the previous element is not zero
+#     indices_to_zero = shifted_resp != prev
+#     # Set the corresponding elements in the original array to zero
+#     der_test_resp[indices_to_zero] = prev
+#
+#     return der_test_resp
+
+# @timing
 def prev_change(der_test_resp: np.ndarray, prev: float = 0.0) -> np.ndarray:
-    """
-    Optimizes the given Python loop using NumPy for faster execution.
-    """
-    der_test_resp = np.array(der_test_resp)  # Convert to NumPy array if it's a list
-    # Create a shifted array to check the previous element
-    shifted_resp = np.concatenate(
-            ([prev], der_test_resp[:-1])
-            )  # prepends a zero to the array and removes the last element.
-    # Find the indices where the previous element is not zero
-    indices_to_zero = shifted_resp != prev
-    # Set the corresponding elements in the original array to zero
-    der_test_resp[indices_to_zero] = prev
+    der_test_resp = np.array(der_test_resp)
+
+    # RAM FIX: Slice comparisons avoid creating a shifted copy of the array in RAM.
+    if len(der_test_resp) > 1:
+        # Find where the previous element (offset by 1) is not equal to 'prev'
+        indices_to_zero = der_test_resp[:-1] != prev
+        # Apply the mask offset by 1 to modify the current elements
+        der_test_resp[1:][indices_to_zero] = prev
 
     return der_test_resp
 
 
-@timing
+# @timing
 def down_sample_function(arr, down_sample=10):
     return arr[::down_sample]
 
 
-@timing
+# @timing
 def down_sample_function_t(arr, accept_mask, down_sample=10):
     # 1. Create a mask for the downsampling (every Nth element)
     # np.arange creates indices, then we check the modulo
     periodic_mask = (np.arange(len(arr)) % down_sample == 0)
     # 2. Combine with the accept_mask using a bitwise OR (|)
     # This keeps elements where val == 1 OR the index is a multiple of down_sample
-    combined_mask = (accept_mask == 1) | periodic_mask
+    combined_mask = (accept_mask >= 1) | periodic_mask
     # 3. Use boolean indexing to filter the array
     return arr[combined_mask]
 
 
 # @timing
-# def smoothing(resp, points, repetitions=1, sharpness=4):
-#     # Sharpness was tested for low weight tails
-#     # 1. Generate your kernel
-#     kernel = conv_vector(points, 'g', sharpness)
-#     # 2. Determine a safe padding length (the length of the kernel is usually plenty)
-#     pad_len = len(kernel)
-#     # 3. Pad the response with its own edge values to prevent diving to zero
-#     padded_resp = np.pad(resp, pad_len, mode='edge')
-#     if repetitions > 1:
-#         for _ in repeat(None, repetitions):
-#             # Shifting to the left self.resp = np.append(response[1:], [0])
-#             padded_resp = np.append(
-#                     # np.convolve is better for short arrays
-#                     # fftconvolve is better for long arrays
-#                     # 4. Convolve the padded array (this will be longer than your original signal)
-#                     fftconvolve(padded_resp, kernel, mode='same')[1:],
-#                     # np.convolve(padded_resp, kernel , mode='same')[1:],
-#                     [0]
-#                     )
-#     else:
-#         padded_resp = fftconvolve(padded_resp, kernel, mode='same')
-#     # 5. Slice off exactly the amount you padded to return to shape (4853,)
-#     return padded_resp[pad_len:-pad_len]
-
-@timing
-def smoothing(resp, points, repetitions=1, sharpness=4):
+def smoothing(resp, points, sharpness=4):
+    """
+    Smooths an array using Overlap-Add convolution to prevent out-of-memory
+    errors on massive datasets (e.g., 40M+ points).
+    """
     # 1. Calculate the effective points (width) for a single pass
     # Using the property: sigma_total = sigma * sqrt(n)
-    eff_points = points * np.sqrt(repetitions)
+    # eff_points = points * np.sqrt(repetitions)
+
     # 2. Generate the single, wider kernel
-    kernel = conv_vector(eff_points, 'g', sharpness)
+    # (Assuming conv_vector is defined elsewhere in your lib_utility or lib_event_detection)
+    kernel = conv_vector(points, 'g', sharpness)
+
     # 3. Padding logic (remains the same to prevent edge diving)
     pad_len = len(kernel)
     padded_resp = np.pad(resp, pad_len, mode='edge')
-    # 4. Single Convolution pass
-    result = fftconvolve(padded_resp, kernel, mode='same')
+
+    # 4. Memory-Efficient Convolution
+    # oaconvolve chunks the massive padded_resp array, preventing huge RAM spikes
+    result = oaconvolve(padded_resp, kernel, mode='same')
+
     # 5. Slice and return
     return result[pad_len:-pad_len]
+# def smoothing(resp, points, repetitions=1, sharpness=4):
+#     # 1. Calculate the effective points (width) for a single pass
+#     # Using the property: sigma_total = sigma * sqrt(n)
+#     print(f"Delete me after {points=} {repetitions=} {sharpness=}")
+#     eff_points = points * np.sqrt(repetitions)  # TODO remove this part, with sharpness is enough
+#     print(f"Delete me after {eff_points=}")
+#     # 2. Generate the single, wider kernel
+#     kernel = conv_vector(eff_points, 'g', sharpness)
+#     print(f"Delete me after {kernel=}")
+#     # 3. Padding logic (remains the same to prevent edge diving)
+#     pad_len = len(kernel)
+#     print(f"Delete me after {pad_len=}")
+#     padded_resp = np.pad(resp, pad_len, mode='edge')
+#     print(f"Delete me after {padded_resp=}")
+#     # 4. Single Convolution pass
+#     result = fftconvolve(padded_resp, kernel, mode='same')
+#     print(f"Delete me after {result=}")
+#     # 5. Slice and return
+#     return result[pad_len:-pad_len]
 
 
 # @timing
@@ -612,16 +825,26 @@ def smoothing(resp, points, repetitions=1, sharpness=4):
 #     return arr
 
 # @timing
+# def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) -> np.ndarray:
+#     """Resets the array to zero and sets specific indices to a value in-place."""
+#     # .fill(0) is the fastest way to wipe an existing array in-place
+#     arr.fill(0.0)
+#     # Assign the value (works for both a single int or an array of indices)
+#     arr[point] = value
+#     return arr
+
 def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) -> np.ndarray:
-    """Resets the array to zero and sets specific indices to a value in-place."""
-    # .fill(0) is the fastest way to wipe an existing array in-place
-    arr.fill(0.0)
-    # Assign the value (works for both a single int or an array of indices)
-    arr[point] = value
-    return arr
+    """Returns a new array of zeros with specific indices set to a value."""
+    # Create a completely new array with the same shape and type as the input
+    new_arr = np.zeros_like(arr)
+
+    # Assign the value to the specific indices on the NEW array
+    new_arr[point] = value
+
+    return new_arr
 
 
-@timing
+# @timing
 def split_position(arr: np.ndarray, direction: int) -> signedinteger[_32Bit | _64Bit] | None:
     match direction:
         case -1:
@@ -632,7 +855,7 @@ def split_position(arr: np.ndarray, direction: int) -> signedinteger[_32Bit | _6
             return None
 
 
-@timing
+# @timing
 def remove_shift(arr_base, arr_resp):
     """Remove shift of the response over time."""
     # pr_lin = opt_linear(arr_base[0], arr_base[1])
@@ -642,13 +865,13 @@ def remove_shift(arr_base, arr_resp):
     return arr_resp
 
 
-@timing
+# @timing
 def make_name(lst: list, extension='.csv') -> str:
     lst_str = [str(i) for i in lst]
     return "_".join(lst_str) + extension
 
 
-@timing
+# @timing
 def replace(this: str, that: str, string: str) -> str:
     """Replaces every occurrence of 'this' with 'that' in 'string'"""
     return that.join(string.split(this))
@@ -677,7 +900,7 @@ def save_dict(const_file: str, loaded_dict: dict):
         json.dump(loaded_dict, f)
 
 
-@timing
+# @timing
 def file_info(path_to_file, parameter):
     p = Path(path_to_file)
     match parameter:
@@ -715,7 +938,6 @@ def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
     The exponential form has to be: I(t) = i0 + pk0 * exp(-t / t0)
     The linear form is: Ln(I(t) - i0) = Ln(pk0) - t/t0"""
     if len(arr):
-        # y: np.ndarray = np.array([])
         match direction:
             case 1:  # positive going
                 i_0 = np.min(arr)
@@ -728,15 +950,6 @@ def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
         return np.log(y + 1.0)
     else:
         raise ValueError("Array is empty")
-
-
-# @timing
-# def lin_fit(y_var, x_var):
-#     """Fits data to a linear relation.
-#     y_var(x_var) = intercept + slope * x_var,
-#     returns slope, intercept, r_value, p_value, std_err and intercept_stderr"""
-#     result = linregress(x_var, y_var)
-#     return result.slope, result.intercept, result.rvalue, result.pvalue, result.stderr, result.intercept_stderr
 
 
 # @timing
@@ -797,7 +1010,7 @@ def exp_fit(response, time, direction):
     return fit_i_0, fit_pk0, fit_t0, r_value  # i0, pk0, t0, r
 
 
-@timing
+# @timing
 def parabolic_fit(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Parabolic fit of an array of points:
     y(x) = ax + bx + cx², returns a, b, c"""
@@ -842,3 +1055,115 @@ def get_names(ori_inst, script):
     print(f"{script_name = }")
 
     return file_name, file_number, file_parent, script_name
+
+
+def calculate_fitted_angle(group1: NDArray, group2: NDArray) -> float:
+    """
+    Calculates the angle between two lines of best fit.
+    """
+    try:
+        # Fit lines (y = mx + b)
+        m1, b1 = np.polyfit(group1[:, 0], group1[:, 1], 1)
+        m2, b2 = np.polyfit(group2[:, 0], group2[:, 1], 1)
+
+        # If slopes are nearly identical, it's essentially a straight line
+        if np.isclose(m1, m2, atol=1e-5):
+            return 180.0
+
+        # Calculate intersection point
+        x_int = (b2 - b1) / (m1 - m2)
+        y_int = m1 * x_int + b1
+        p_intersect = np.array([x_int, y_int])
+
+        # Vectors from intersection to the centroids
+        v1 = np.mean(group1, axis=0) - p_intersect
+        v2 = np.mean(group2, axis=0) - p_intersect
+
+        mag1, mag2 = np.linalg.norm(v1), np.linalg.norm(v2)
+        if mag1 == 0 or mag2 == 0:
+            return 180.0
+
+        cos_theta = np.clip(np.dot(v1, v2) / (mag1 * mag2), -1.0, 1.0)
+        return float(np.degrees(np.arccos(cos_theta)))
+
+    except (np.RankWarning, ValueError):
+        return 180.0
+
+
+def calculate_oriented_angle(x_group: NDArray, y_group: NDArray) -> float:
+    """
+    Calculates the interior angle at vertex b (index 1).
+    Assumes y_group has already been normalized to the x_group scale.
+    """
+    # 1. Define vectors from vertex P1
+    ax, ay = x_group[0] - x_group[1], y_group[0] - y_group[1]
+    bx, by = x_group[2] - x_group[1], y_group[2] - y_group[1]
+
+    # 2. Magnitudes (using pre-normalized components)
+    mag_a = np.sqrt(ax ** 2 + ay ** 2)
+    mag_b = np.sqrt(bx ** 2 + by ** 2)
+
+    # Safety check for overlapping points
+    if mag_a == 0 or mag_b == 0:
+        return 180.0
+
+    # 3. Dot product and angle calculation
+    dot_product = (ax * bx) + (ay * by)
+    cos_theta = np.clip(dot_product / (mag_a * mag_b), -1.0, 1.0)
+
+    return float(np.degrees(np.arccos(cos_theta)))
+
+
+def get_rolling_angles(data_x: NDArray, data_y: NDArray) -> NDArray:
+    """
+    Rolling window through data using 3-point vertex logic.
+    Normalizes the Y array globally based on the absolute magnitude
+    of the X and Y ranges before iterating.
+    """
+    n = len(data_y)
+
+    # 1. Assess absolute magnitude of the global ranges
+    # This evaluates the entire trace to establish a single, consistent aspect ratio
+    x_range = np.abs(np.max(data_x) - np.min(data_x))
+    y_range = np.abs(np.max(data_y) - np.min(data_y))
+
+    # 2. Apply Normalization to the entire Y array
+    # If the array is perfectly flat, we skip division to avoid NaN
+    if y_range > 0 and x_range > 0:
+        scale_factor = y_range / x_range
+        norm_y = data_y / scale_factor
+    else:
+        norm_y = data_y
+
+    # 3. Initialize array with 180.0 (straight line baseline)
+    angles = np.full(n, 180.0, dtype=np.float64)
+
+    # 4. Rolling window loop over the normalized data
+    for i in range(1, n - 1):
+        angles[i] = calculate_oriented_angle(
+                data_x[i - 1: i + 2],
+                norm_y[i - 1: i + 2]
+                )
+
+    return angles
+
+
+def sort_vectors_by_first(vec_primary: NDArray, vec_secondary: NDArray) -> tuple[NDArray, NDArray]:
+    """
+    Sorts two vectors based on the values of the first vector in ascending order.
+
+    Parameters:
+    vec_primary: The vector that determines the order (e.g., data_x).
+    vec_secondary: The vector to be reordered alongside the primary (e.g., data_y).
+
+    Returns:
+    tuple: (sorted_primary, sorted_secondary)
+    """
+    # Get the indices that would sort the primary vector
+    sort_indices = np.argsort(vec_primary)
+
+    # Apply those indices to both vectors
+    sorted_primary = vec_primary[sort_indices]
+    sorted_secondary = vec_secondary[sort_indices]
+
+    return sorted_primary, sorted_secondary

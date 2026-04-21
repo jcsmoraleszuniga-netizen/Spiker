@@ -1,10 +1,13 @@
 import gc
 import os
+
+from PyQt6.QtCore import Qt, pyqtSignal
+
 from lib_event_detection import EvtPro
 from lib_utility import get_previous_folder, load_dict, save_dict, save_previous_folder
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
-    QApplication, QHBoxLayout, QSpinBox, QWidget, QDialog, QLabel, QLineEdit, QPushButton,
+    QApplication, QDoubleSpinBox, QHBoxLayout, QSlider, QSpinBox, QWidget, QDialog, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QMessageBox, QGridLayout, QListWidget, QListWidgetItem,
     QInputDialog, QCheckBox, QFileDialog, QScrollArea
     )
@@ -40,17 +43,40 @@ def get_from_dialog(dialog_class):
 _current_plot = None  # Global variable to store the current plot figure
 
 
+# def show_plot(original, title="No Title.", values=(0.0, 0.0)):
+#     """
+#     Displays a plot of the original data, optionally with vertical lines.
+#     Args:
+#         original: The data to plot (an object with coti and resp attributes).
+#         title: The title of the plot.
+#         values: A tuple or list of x-values for vertical lines.
+#     """
+#     global _current_plot
+#     if _current_plot:  # Close previous plot if it exists
+#         plt.close(_current_plot)
+#     fig = plt.figure()
+#     match original.mode:
+#         case "continuous":
+#             plt.plot(original.time, original.resp, linewidth=0.5)
+#             plt.plot(original.time, original.cdac, "r")
+#         case "sweeps":
+#             for resp in reversed(original.sweeps):
+#                 plt.plot(original.time, resp, linewidth=0.5)
+#     plt.axhline(y=0.0, color="k", linestyle='--')
+#     for x_value in values:
+#         plt.axvline(x=x_value, color="r", linestyle='--')
+#     plt.title(title)
+#     plt.show(block=False)
+#     _current_plot = fig  # Store the current figure
+
 def show_plot(original, title="No Title.", values=(0.0, 0.0)):
-    """
-    Displays a plot of the original data, optionally with vertical lines.
-    Args:
-        original: The data to plot (an object with coti and resp attributes).
-        title: The title of the plot.
-        values: A tuple or list of x-values for vertical lines.
-    """
     global _current_plot
-    if _current_plot:  # Close previous plot if it exists
-        plt.close(_current_plot)
+
+    if _current_plot:
+        _current_plot.clf()  # 1. Wipe the data arrays from the figure
+        plt.close(_current_plot)  # 2. Close the Matplotlib window
+        _current_plot = None  # 3. Kill the global reference so GC can run
+
     fig = plt.figure()
     match original.mode:
         case "continuous":
@@ -64,6 +90,7 @@ def show_plot(original, title="No Title.", values=(0.0, 0.0)):
         plt.axvline(x=x_value, color="r", linestyle='--')
     plt.title(title)
     plt.show(block=False)
+
     _current_plot = fig  # Store the current figure
 
 
@@ -117,7 +144,48 @@ class AnalysisSelector(QWidget):
 
         self.setLayout(layout)
 
+    # def select_file(self):
+    #     previous_folder = get_previous_folder(self.title)
+    #     if not previous_folder:
+    #         previous_folder = os.path.expanduser("~")
+    #
+    #     try:
+    #         file_path, _ = open_file_dialog(self, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
+    #         if file_path:
+    #             save_previous_folder(os.path.dirname(file_path), self.title)
+    #
+    #             # --- NEW: Fetch the current integer value from the UI ---
+    #             self.location = self.location_spinbox.value()
+    #
+    #             # Pass self.location to EvtPro
+    #             self.original = EvtPro(file_path, True, self.location)
+    #             show_plot(self.original, title="Total response.")
+    #             print(f"{self.original = }")
+    #     except Exception as e:
+    #         QMessageBox.critical(self, "Error", f"Error loading file: {e}")
+    #         self.status_label.setText(f"Error loading file: {e}")
+
     def select_file(self):
+        global _current_plot  # Bring in the global tracker
+
+        # --- MEMORY CLEARING BLOCK ---
+        # 1. Destroy the global Matplotlib figure keeping the data alive
+        if _current_plot:
+            _current_plot.clf()
+            plt.close(_current_plot)
+            _current_plot = None
+
+        plt.close('all')
+
+        # 2. Drop the explicit object reference
+        self.original = None
+
+        # 3. Force garbage collection NOW, before the new file loads
+        import gc
+
+        gc.collect()
+        # -----------------------------
+
         previous_folder = get_previous_folder(self.title)
         if not previous_folder:
             previous_folder = os.path.expanduser("~")
@@ -127,26 +195,36 @@ class AnalysisSelector(QWidget):
             if file_path:
                 save_previous_folder(os.path.dirname(file_path), self.title)
 
-                # --- NEW: Fetch the current integer value from the UI ---
                 self.location = self.location_spinbox.value()
 
-                # Pass self.location to EvtPro
+                # Load the NEW file
                 self.original = EvtPro(file_path, True, self.location)
                 show_plot(self.original, title="Total response.")
                 print(f"{self.original = }")
+                self.status_label.setText(f"Loaded: {os.path.basename(file_path)}")
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error loading file: {e}")
             self.status_label.setText(f"Error loading file: {e}")
 
     def run_analyses(self):
+        # --- MEMORY CLEARING BLOCK ---
+        # Close all currently open analysis windows
         plt.close('all')
-        if len(self.original):
+        # Force the garbage collector to destroy the old plot arrays
+        gc.collect()
+        # -----------------------------
+        # if len(self.original):
+        if self.original:
             self.status_label.setText("Running analyses...")
             try:
                 analyses = dict(zip(self.checkboxes, self.programs_dict.values()))
                 for checkbox, func in analyses.items():
                     if checkbox.isChecked():
                         with_sections(func, BoundariesDialog, self.original)
+                # Run garbage collection one more time after all analyses finish
+                # in case temporary arrays were left behind by the math functions
+                gc.collect()
                 self.status_label.setText("Analyses complete.")
             except Exception as e:
                 self.status_label.setText(f"Error: {e}")
@@ -247,10 +325,18 @@ class ConstDialog(QDialog):
         self.line_edits = {}
         self.checkboxes = {}
         self.lists = {}
+        self.spinboxes = {}  # NEW: Tracks the numeric inputs
         self.status_label = QLabel("")
+
+        # Make the window a bit wider to accommodate the sliders nicely
+        self.resize(550, 600)
         self.init_ui()
 
     def init_ui(self):
+        # Clear any existing layout if this is called dynamically
+        if self.layout() is not None:
+            QWidget().setLayout(self.layout())
+
         self.setWindowTitle(self.title)
         print(f"Running init_ui ...")
         main_layout = QVBoxLayout()
@@ -260,9 +346,10 @@ class ConstDialog(QDialog):
         layout = QVBoxLayout(scroll_widget)
 
         for key, value in self.result.items():
-            key_label = QLabel(key)
-            layout.addWidget(key_label)
             if isinstance(value, list):
+                # --- List UI ---
+                key_label = QLabel(key)
+                layout.addWidget(key_label)
                 self.lists[key] = QListWidget()
                 for item in value:
                     QListWidgetItem(str(item), self.lists[key])
@@ -270,46 +357,113 @@ class ConstDialog(QDialog):
                 edit_button = QPushButton(f'Edit {key}')
                 edit_button.clicked.connect(lambda checked, k=key: self.edit_list(k))
                 layout.addWidget(edit_button)
+
             elif isinstance(value, bool):
-                checkbox = QCheckBox()
+                # --- Boolean UI ---
+                checkbox = QCheckBox(key)  # Put label directly on checkbox for clean UI
                 checkbox.setChecked(value)
                 checkbox.setToolTip("Use several intervals if you activate this option: i.e. interval=600.")
                 self.checkboxes[key] = checkbox
                 layout.addWidget(checkbox)
+
+            elif isinstance(value, (int, float)):
+                # --- Slider & Spinbox UI for Numbers ---
+                h_layout = QHBoxLayout()
+                label = QLabel(key)
+                label.setMinimumWidth(160)
+
+                # Dynamically calculate ranges and decimal steps
+                if isinstance(value, int):
+                    decimals = 0
+                    step = 1
+                    max_val = abs(value) * 100 if value != 0 else 100
+                    min_val = -max_val
+                else:
+                    val_str = f"{value:.6f}".rstrip('0')
+                    decimals = 1 if val_str.endswith('.') else len(val_str.split('.')[1])
+                    decimals = max(2, min(decimals, 6))
+                    step = 10 ** -decimals
+                    max_val = abs(value) * 1000 if value != 0 else 1.0
+                    min_val = -max_val
+
+                spinbox = QDoubleSpinBox()
+                spinbox.setDecimals(decimals)
+                spinbox.setRange(min_val, max_val)
+                spinbox.setSingleStep(step)
+                spinbox.setMinimumWidth(130)
+                spinbox.setValue(value)
+
+                slider = QSlider(Qt.Orientation.Horizontal)
+                slider.setMaximumWidth(150)
+                scale_factor = 10 ** decimals
+                slider.setRange(int(min_val * scale_factor), int(max_val * scale_factor))
+                slider.setValue(int(value * scale_factor))
+
+                # Link slider and spinbox together
+                slider.valueChanged.connect(lambda v, sb=spinbox, sf=scale_factor: sb.setValue(v / sf))
+                spinbox.valueChanged.connect(lambda v, sl=slider, sf=scale_factor: sl.setValue(int(v * sf)))
+
+                self.spinboxes[key] = spinbox
+
+                h_layout.addWidget(label)
+                h_layout.addWidget(slider)
+                h_layout.addWidget(spinbox)
+                layout.addLayout(h_layout)
+
             else:
+                # --- Standard Text UI ---
+                h_layout = QHBoxLayout()
+                key_label = QLabel(key)
+                h_layout.addWidget(key_label)
                 line_edit = QLineEdit(str(value))
                 self.line_edits[key] = line_edit
-                layout.addWidget(line_edit)
+                h_layout.addWidget(line_edit)
+                layout.addLayout(h_layout)
 
         scroll_area.setWidget(scroll_widget)
         scroll_area.setWidgetResizable(True)
         main_layout.addWidget(scroll_area)
 
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(self.accept_and_save)
-        main_layout.addWidget(ok_button)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        main_layout.addWidget(cancel_button)
+        # --- Action Buttons ---
+        button_layout = QHBoxLayout()
         load_button = QPushButton("Load configuration")
         load_button.clicked.connect(self.select_file)
-        main_layout.addWidget(load_button)
+        button_layout.addWidget(load_button)
 
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept_and_save)
+        button_layout.addWidget(ok_button)
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+
+        main_layout.addLayout(button_layout)
         self.setLayout(main_layout)
 
     def accept_and_save(self):
+        # 1. Save Text Inputs
         for key, line_edit in self.line_edits.items():
+            text = line_edit.text()
             try:
                 # Handle string values like 'z'
-                if line_edit.text().isalpha():
-                    self.result[key] = line_edit.text()
+                if text.isalpha() or not text:
+                    self.result[key] = text
                 else:
-                    self.result[key] = float(line_edit.text()) if '.' in line_edit.text() else int(line_edit.text())
+                    self.result[key] = float(text) if '.' in text else int(text)
             except ValueError:
-                QMessageBox.critical(self, "Error", f"Invalid value for {key}")
-                return
+                self.result[key] = text
+
+        # 2. Save Checkboxes
         for key, checkbox in self.checkboxes.items():
             self.result[key] = checkbox.isChecked()
+
+        # 3. Save Numeric Spinboxes
+        for key, spinbox in self.spinboxes.items():
+            if spinbox.decimals() == 0:
+                self.result[key] = int(spinbox.value())
+            else:
+                self.result[key] = spinbox.value()
 
         self.accept()
 
@@ -322,28 +476,142 @@ class ConstDialog(QDialog):
                 QListWidgetItem(str(item), self.lists[key])
 
     def select_file(self):
+        print(f"Delete after {self.title=}")
         previous_folder = get_previous_folder(self.title)
+        print(f"Delete after {previous_folder=}")
         if not previous_folder:
             previous_folder = os.path.expanduser("~")
+            print(f"Delete after ~{previous_folder=}")
         try:
             file_path, _ = open_file_dialog(self, previous_folder, "JSON Files (*.json)")
+            print(f"Delete after {file_path=}")
             if file_path:
                 save_previous_folder(os.path.dirname(file_path), self.title)
+
+                # 1. Load the new data directly into the result dictionary
                 loaded_dict = load_dict(file_path, self.result)
+                print(f"Delete after {loaded_dict=}")
                 self.result = loaded_dict.copy()
-                self.line_edits = {}
-                self.checkboxes = {}
-                self.status_label = QLabel("")
-                self.init_ui()
-                self.accept_and_save()
+
+                # 2. Skip the UI rebuild entirely and just close the dialog!
+                self.accept()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error loading file: {e}")
+            print(f"Delete after Error loading file: {e}")
             self.status_label.setText(f"Error loading file: {e}")
 
     def closeEvent(self, event):
         # Remove closeEvent, accept() handles it.
         super().closeEvent(event)
+
+# @get_from_dialog
+# class ConstDialog(QDialog):
+#
+#     def __init__(self, param_dict, title, parent=None):
+#         super().__init__(parent)
+#         self.result = param_dict.copy()
+#         self.title = title
+#         self.line_edits = {}
+#         self.checkboxes = {}
+#         self.lists = {}
+#         self.status_label = QLabel("")
+#         self.init_ui()
+#
+#     def init_ui(self):
+#         self.setWindowTitle(self.title)
+#         print(f"Running init_ui ...")
+#         main_layout = QVBoxLayout()
+#
+#         scroll_area = QScrollArea()
+#         scroll_widget = QWidget()
+#         layout = QVBoxLayout(scroll_widget)
+#
+#         for key, value in self.result.items():
+#             key_label = QLabel(key)
+#             layout.addWidget(key_label)
+#             if isinstance(value, list):
+#                 self.lists[key] = QListWidget()
+#                 for item in value:
+#                     QListWidgetItem(str(item), self.lists[key])
+#                 layout.addWidget(self.lists[key])
+#                 edit_button = QPushButton(f'Edit {key}')
+#                 edit_button.clicked.connect(lambda checked, k=key: self.edit_list(k))
+#                 layout.addWidget(edit_button)
+#             elif isinstance(value, bool):
+#                 checkbox = QCheckBox()
+#                 checkbox.setChecked(value)
+#                 checkbox.setToolTip("Use several intervals if you activate this option: i.e. interval=600.")
+#                 self.checkboxes[key] = checkbox
+#                 layout.addWidget(checkbox)
+#             else:
+#                 line_edit = QLineEdit(str(value))
+#                 self.line_edits[key] = line_edit
+#                 layout.addWidget(line_edit)
+#
+#         scroll_area.setWidget(scroll_widget)
+#         scroll_area.setWidgetResizable(True)
+#         main_layout.addWidget(scroll_area)
+#
+#         ok_button = QPushButton("OK")
+#         ok_button.clicked.connect(self.accept_and_save)
+#         main_layout.addWidget(ok_button)
+#         cancel_button = QPushButton("Cancel")
+#         cancel_button.clicked.connect(self.reject)
+#         main_layout.addWidget(cancel_button)
+#         load_button = QPushButton("Load configuration")
+#         load_button.clicked.connect(self.select_file)
+#         main_layout.addWidget(load_button)
+#
+#         self.setLayout(main_layout)
+#
+#     def accept_and_save(self):
+#         for key, line_edit in self.line_edits.items():
+#             try:
+#                 # Handle string values like 'z'
+#                 if line_edit.text().isalpha():
+#                     self.result[key] = line_edit.text()
+#                 else:
+#                     self.result[key] = float(line_edit.text()) if '.' in line_edit.text() else int(line_edit.text())
+#             except ValueError:
+#                 QMessageBox.critical(self, "Error", f"Invalid value for {key}")
+#                 return
+#         for key, checkbox in self.checkboxes.items():
+#             self.result[key] = checkbox.isChecked()
+#
+#         self.accept()
+#
+#     def edit_list(self, key):
+#         list_dialog = ListEditDialog(self.result[key])
+#         if list_dialog.exec() == QDialog.DialogCode.Accepted:
+#             self.result[key] = list_dialog.result
+#             self.lists[key].clear()
+#             for item in self.result[key]:
+#                 QListWidgetItem(str(item), self.lists[key])
+#
+#     def select_file(self):
+#         previous_folder = get_previous_folder(self.title)
+#         if not previous_folder:
+#             previous_folder = os.path.expanduser("~")
+#         try:
+#             file_path, _ = open_file_dialog(self, previous_folder, "JSON Files (*.json)")
+#             if file_path:
+#                 save_previous_folder(os.path.dirname(file_path), self.title)
+#                 loaded_dict = load_dict(file_path, self.result)
+#                 self.result = loaded_dict.copy()
+#                 self.line_edits = {}
+#                 self.checkboxes = {}
+#                 self.status_label = QLabel("")
+#                 self.init_ui()
+#                 self.accept_and_save()
+#
+#         except Exception as e:
+#             QMessageBox.critical(self, "Error", f"Error loading file: {e}")
+#             self.status_label.setText(f"Error loading file: {e}")
+#
+#     def closeEvent(self, event):
+#         # Remove closeEvent, accept() handles it.
+#         super().closeEvent(event)
 
 
 class ListEditDialog(QDialog):
@@ -500,7 +768,7 @@ def manage_settings(const_file: str, const: dict):
     """Opens a stored dictionary 'const_file' to be modified. If there is no 'const_file' stored,
     uses 'const' as a default to begin the modification"""
     loaded_dict = load_dict(const_file, const)
-    updated_const: dict = ConstDialog(loaded_dict, "Event detection")
+    updated_const: dict = ConstDialog(loaded_dict, "Save to JSON?")
     if updated_const:
         loaded_dict.update(updated_const)
         print("Constants updated.")
@@ -508,6 +776,128 @@ def manage_settings(const_file: str, const: dict):
         print("Constants-dialog canceled.")
     save_dict(const_file, loaded_dict)
     return loaded_dict
+
+# def manage_settings(const_file: str, const: dict):
+#     """Opens a stored dictionary 'const_file' to be modified. If there is no 'const_file' stored,
+#     uses 'const' as a default to begin the modification"""
+#     loaded_dict = load_dict(const_file, const)
+#     updated_const: dict = gui.ConstDialog(loaded_dict, "Event detection")
+#     if updated_const:
+#         loaded_dict.update(updated_const)
+#         print("Constants updated.")
+#     else:
+#         print("Constants dialog canceled.")
+#     save_dict(const_file, loaded_dict)
+#     return loaded_dict
+
+
+class ParameterTunerDialog(QDialog):
+
+    def __init__(self, initial_consts, aliases=None):
+        super().__init__()
+        self.const = initial_consts.copy()
+        self.aliases = aliases or {}
+        self.controls = {}
+
+        self.setWindowTitle("Tune Parameters")
+        self.resize(550, 600)
+        self.window_layout = QVBoxLayout(self)
+        self.setup_ui()
+
+    def setup_ui(self):
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_content = QWidget()
+        self.controls_layout = QVBoxLayout(scroll_content)
+
+        for key, value in self.const.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+
+            display_name = self.aliases.get(key, key.replace("_", " ").title())
+
+            if isinstance(value, int):
+                decimals = 0
+                step = 1
+                max_val = abs(value) * 100 if value != 0 else 100
+                min_val = -max_val
+            else:
+                val_str = f"{value:.6f}".rstrip('0')
+                if val_str.endswith('.'):
+                    decimals = 1
+                else:
+                    decimals = len(val_str.split('.')[1])
+                decimals = max(2, min(decimals, 6))
+                step = 10 ** -decimals
+                max_val = abs(value) * 1000 if value != 0 else 1.0
+                min_val = -max_val
+
+            self.add_control(key, display_name, min_val, max_val, step, decimals)
+
+        self.controls_layout.addStretch()
+        scroll_area.setWidget(scroll_content)
+        self.window_layout.addWidget(scroll_area)
+
+        # --- The Two Buttons ---
+        button_layout = QHBoxLayout()
+
+        self.test_btn = QPushButton("Test Settings")
+        self.test_btn.setStyleSheet("font-weight: bold; background-color: #e0e0e0; padding: 10px;")
+        self.test_btn.clicked.connect(self.save_and_test)
+
+        self.continue_btn = QPushButton("Accept & Continue")
+        self.continue_btn.setStyleSheet("font-weight: bold; background-color: #4CAF50; color: white; padding: 10px;")
+        self.continue_btn.clicked.connect(self.save_and_accept)
+
+        button_layout.addWidget(self.test_btn)
+        button_layout.addWidget(self.continue_btn)
+        self.window_layout.addLayout(button_layout)
+
+    def add_control(self, key, label_text, min_val, max_val, step, decimals):
+        layout = QHBoxLayout()
+        label = QLabel(label_text)
+        label.setMinimumWidth(160)
+
+        spinbox = QDoubleSpinBox()
+        spinbox.setDecimals(decimals)
+        spinbox.setRange(min_val, max_val)
+        spinbox.setSingleStep(step)
+        spinbox.setMinimumWidth(130)
+
+        initial_value = self.const.get(key, min_val)
+        spinbox.setValue(initial_value)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setMaximumWidth(150)
+
+        scale_factor = 10 ** decimals
+        slider.setRange(int(min_val * scale_factor), int(max_val * scale_factor))
+        slider.setValue(int(initial_value * scale_factor))
+
+        slider.valueChanged.connect(lambda v, sb=spinbox, sf=scale_factor: sb.setValue(v / sf))
+        spinbox.valueChanged.connect(lambda v, sl=slider, sf=scale_factor: sl.setValue(int(v * sf)))
+
+        self.controls[key] = spinbox
+        layout.addWidget(label)
+        layout.addWidget(slider)
+        layout.addWidget(spinbox)
+        self.controls_layout.addLayout(layout)
+
+    def save_gui_to_const(self):
+        """Helper to read all GUI values back into the dictionary."""
+        for key, spinbox in self.controls.items():
+            if spinbox.decimals() == 0:
+                self.const[key] = int(spinbox.value())
+            else:
+                self.const[key] = spinbox.value()
+
+    def save_and_test(self):
+        self.save_gui_to_const()
+        self.done(2)  # Closes dialog and returns custom code 2 for "Test"
+
+    def save_and_accept(self):
+        self.save_gui_to_const()
+        self.accept()  # Closes dialog and returns code 1 for "Accept"
 
 
 if __name__ == "__main__":
