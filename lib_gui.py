@@ -1,9 +1,8 @@
 import gc
 import os
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
 
-from lib_event_detection import EvtPro
 from lib_utility import get_previous_folder, load_dict, save_dict, save_previous_folder
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
@@ -43,31 +42,32 @@ def get_from_dialog(dialog_class):
 _current_plot = None  # Global variable to store the current plot figure
 
 
-# def show_plot(original, title="No Title.", values=(0.0, 0.0)):
-#     """
-#     Displays a plot of the original data, optionally with vertical lines.
-#     Args:
-#         original: The data to plot (an object with coti and resp attributes).
-#         title: The title of the plot.
-#         values: A tuple or list of x-values for vertical lines.
-#     """
-#     global _current_plot
-#     if _current_plot:  # Close previous plot if it exists
-#         plt.close(_current_plot)
-#     fig = plt.figure()
-#     match original.mode:
-#         case "continuous":
-#             plt.plot(original.time, original.resp, linewidth=0.5)
-#             plt.plot(original.time, original.cdac, "r")
-#         case "sweeps":
-#             for resp in reversed(original.sweeps):
-#                 plt.plot(original.time, resp, linewidth=0.5)
-#     plt.axhline(y=0.0, color="k", linestyle='--')
-#     for x_value in values:
-#         plt.axvline(x=x_value, color="r", linestyle='--')
-#     plt.title(title)
-#     plt.show(block=False)
-#     _current_plot = fig  # Store the current figure
+def get_record_from_dialog(parent=None, location=1, custom_filter="ABF Files (*.abf);; CSV Files (*.csv *.CSV)"):
+    """
+    Handles the UI logic for file selection and object initialization.
+    """
+    import sys
+    import os
+    from PyQt6.QtWidgets import QApplication
+    from lib_utility import get_previous_folder, save_previous_folder
+    from lib_event_detection import EvtPro
+
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    # Use the parent's title for folder history if available
+    title = getattr(parent, 'title', None)
+    previous_folder = get_previous_folder(title) or os.path.expanduser("~")
+
+    file_path, _ = open_file_dialog(parent, previous_folder, custom_filter)
+
+    if not file_path:
+        return None, None
+
+    save_previous_folder(os.path.dirname(file_path), title)
+
+    # Return both the object and the path (so the UI can show the filename)
+    return EvtPro(file_path, True, location), file_path
+
 
 def show_plot(original, title="No Title.", values=(0.0, 0.0)):
     global _current_plot
@@ -144,31 +144,10 @@ class AnalysisSelector(QWidget):
 
         self.setLayout(layout)
 
-    # def select_file(self):
-    #     previous_folder = get_previous_folder(self.title)
-    #     if not previous_folder:
-    #         previous_folder = os.path.expanduser("~")
-    #
-    #     try:
-    #         file_path, _ = open_file_dialog(self, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
-    #         if file_path:
-    #             save_previous_folder(os.path.dirname(file_path), self.title)
-    #
-    #             # --- NEW: Fetch the current integer value from the UI ---
-    #             self.location = self.location_spinbox.value()
-    #
-    #             # Pass self.location to EvtPro
-    #             self.original = EvtPro(file_path, True, self.location)
-    #             show_plot(self.original, title="Total response.")
-    #             print(f"{self.original = }")
-    #     except Exception as e:
-    #         QMessageBox.critical(self, "Error", f"Error loading file: {e}")
-    #         self.status_label.setText(f"Error loading file: {e}")
-
     def select_file(self):
         global _current_plot  # Bring in the global tracker
 
-        # --- MEMORY CLEARING BLOCK ---
+        # --- SCORCHED EARTH MEMORY CLEARING BLOCK ---
         # 1. Destroy the global Matplotlib figure keeping the data alive
         if _current_plot:
             _current_plot.clf()
@@ -184,28 +163,73 @@ class AnalysisSelector(QWidget):
         import gc
 
         gc.collect()
-        # -----------------------------
-
-        previous_folder = get_previous_folder(self.title)
-        if not previous_folder:
-            previous_folder = os.path.expanduser("~")
+        # ---------------------------------------------
 
         try:
-            file_path, _ = open_file_dialog(self, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
-            if file_path:
-                save_previous_folder(os.path.dirname(file_path), self.title)
+            # Get the current location value from the UI
+            current_loc = self.location_spinbox.value()
 
-                self.location = self.location_spinbox.value()
+            # Call the helper function (now in the same file)
+            new_record, file_path = get_record_from_dialog(parent=self, location=current_loc)
 
-                # Load the NEW file
-                self.original = EvtPro(file_path, True, self.location)
+            if new_record:
+                import os
+
+                # Update class attributes
+                self.original = new_record
+                self.location = current_loc
+
+                # Show the plot (show_plot is already in this file)
                 show_plot(self.original, title="Total response.")
+
+                # Update UI elements
                 print(f"{self.original = }")
                 self.status_label.setText(f"Loaded: {os.path.basename(file_path)}")
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error loading file: {e}")
             self.status_label.setText(f"Error loading file: {e}")
+    # def select_file(self):
+    #     global _current_plot  # Bring in the global tracker
+    #
+    #     # --- MEMORY CLEARING BLOCK ---
+    #     # 1. Destroy the global Matplotlib figure keeping the data alive
+    #     if _current_plot:
+    #         _current_plot.clf()
+    #         plt.close(_current_plot)
+    #         _current_plot = None
+    #
+    #     plt.close('all')
+    #
+    #     # 2. Drop the explicit object reference
+    #     self.original = None
+    #
+    #     # 3. Force garbage collection NOW, before the new file loads
+    #     import gc
+    #
+    #     gc.collect()
+    #     # -----------------------------
+    #
+    #     previous_folder = get_previous_folder(self.title)
+    #     if not previous_folder:
+    #         previous_folder = os.path.expanduser("~")
+    #
+    #     try:
+    #         file_path, _ = open_file_dialog(self, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
+    #         if file_path:
+    #             save_previous_folder(os.path.dirname(file_path), self.title)
+    #
+    #             self.location = self.location_spinbox.value()
+    #             from lib_event_detection import EvtPro
+    #             # Load the NEW file
+    #             self.original = EvtPro(file_path, True, self.location)
+    #             show_plot(self.original, title="Total response.")
+    #             print(f"{self.original = }")
+    #             self.status_label.setText(f"Loaded: {os.path.basename(file_path)}")
+    #
+    #     except Exception as e:
+    #         QMessageBox.critical(self, "Error", f"Error loading file: {e}")
+    #         self.status_label.setText(f"Error loading file: {e}")
 
     def run_analyses(self):
         # --- MEMORY CLEARING BLOCK ---
@@ -245,73 +269,179 @@ class BoundariesDialog(QDialog):
 
     def __init__(self, start=0.0, end=0.0, title="", parent=None):
         super().__init__(parent)
+
+        # Persistence setup: Unique key per dataset title
+        self.settings_key = f"Boundaries/{title}"
+        self.settings = QSettings("MyLabApp", "BoundarySettings")
+
         self.start = start
         self.end = end
         self.title = title
         self.result = None
-        self.start_label = QLabel("Start Time:")
+
+        # --- Define UI Elements ---
         self.start_input = QLineEdit()
-        self.end_label = QLabel("End Time:")
         self.end_input = QLineEdit()
-        self.interval_label = QLabel(f"Interval Size:")
         self.interval_input = QLineEdit()
-        self.default_checkbox = QCheckBox("Use default values")
+
+        # Checkboxes for min/max shortcuts
+        self.min_start_cb = QCheckBox("Min")
+        self.max_end_cb = QCheckBox("Max")
+        self.max_interval_cb = QCheckBox("Max")
+
+        self.default_checkbox = QCheckBox("Use default values (Reset all)")
+
         self.ok_button = QPushButton("OK")
         self.ok_button.clicked.connect(self.get_values)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.clicked.connect(self.reject)
+
+        # Build UI and connect interactivity
         self.init_ui()
+        self.connect_logic()
+
+        # Load values from the last time this specific title was opened
+        self.load_remembered_values()
 
     def init_ui(self):
-        self.setWindowTitle(f"{self.title} boundaries: {self.start:5.3f}s to {self.end:5.3f}s")
+        self.setWindowTitle(f"{self.title} boundaries: {self.start:.3f}s to {self.end:.3f}s")
+        self.setMinimumWidth(400)
         layout = QGridLayout()
-        layout.addWidget(self.start_label, 0, 0)
+
+        # Row 0: Start Time
+        layout.addWidget(QLabel("Start Time:"), 0, 0)
         layout.addWidget(self.start_input, 0, 1)
-        layout.addWidget(self.end_label, 1, 0)
+        layout.addWidget(self.min_start_cb, 0, 2)
+
+        # Row 1: End Time
+        layout.addWidget(QLabel("End Time:"), 1, 0)
         layout.addWidget(self.end_input, 1, 1)
-        layout.addWidget(self.interval_label, 2, 0)
+        layout.addWidget(self.max_end_cb, 1, 2)
+
+        # Row 2: Interval Size
+        layout.addWidget(QLabel("Interval Size:"), 2, 0)
         layout.addWidget(self.interval_input, 2, 1)
-        layout.addWidget(self.default_checkbox, 3, 0)
-        layout.addWidget(self.ok_button, 4, 0)
-        layout.addWidget(self.cancel_button, 4, 1)
+        layout.addWidget(self.max_interval_cb, 2, 2)
+
+        # Row 3: Global Reset
+        layout.addWidget(self.default_checkbox, 3, 0, 1, 3)
+
+        # Row 4: Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout, 4, 0, 1, 3)
+
         self.setLayout(layout)
 
-    def get_values(self):
-        if self.default_checkbox.isChecked():
-            start = self.start
-            end = self.end
-            interval = self.end
-            self.result = (start, end, interval)
-            self.accept()
+    def connect_logic(self):
+        """Connects UI signals to automate value filling and field locking."""
+        # Start logic: When Min is checked, force value to self.start
+        self.min_start_cb.toggled.connect(
+                lambda checked: self._apply_auto_logic(self.start_input, self.start, checked)
+                )
+
+        # End logic: When Max is checked, force value to self.end
+        self.max_end_cb.toggled.connect(
+                lambda checked: self._apply_auto_logic(self.end_input, self.end, checked)
+                )
+
+        # Interval logic: Depends on the current text in Start and End boxes
+        self.max_interval_cb.toggled.connect(self.update_max_interval)
+        self.start_input.textChanged.connect(self.update_max_interval)
+        self.end_input.textChanged.connect(self.update_max_interval)
+
+    def _apply_auto_logic(self, line_edit, value, is_checked):
+        """Helper to lock/unlock and set text values."""
+        if is_checked:
+            line_edit.setText(f"{value:.6f}")
+            line_edit.setReadOnly(True)
+            # Light gray background to indicate 'Locked'
+            line_edit.setStyleSheet("background-color: #e9e9e9; color: #444;")
         else:
+            line_edit.setReadOnly(False)
+            line_edit.setStyleSheet("")
+
+    def update_max_interval(self):
+        """Calculates (End - Start) dynamically if the Max checkbox is active."""
+        if self.max_interval_cb.isChecked():
             try:
-                start = float(self.start_input.text())
-                end = float(self.end_input.text())
-                interval = float(self.interval_input.text())
-
-                if not (end < self.end):
-                    end = self.end
-                    print("Using max value for 'end'.")
-
-                if not (0.0 <= self.start <= start < end and start < self.end):
-                    QMessageBox.critical(self, f"Error", f"Range values are wrong: {self.end - self.start} max.")
-                    return
-
-                if not (interval > 0.0):
-                    QMessageBox.critical(self, f"Error", f"Interval value must not be 0.0.")
-                    return
-
-                if not (interval <= (end - start)):
-                    interval = end - start
-                    print("Using full range for 'interval'.")
-
-                self.result = (start, end, interval)
-                self.accept()
+                s = float(self.start_input.text())
+                e = float(self.end_input.text())
+                diff = max(0.0, e - s)
+                self.interval_input.setText(f"{diff:.6f}")
+                self.interval_input.setReadOnly(True)
+                self.interval_input.setStyleSheet("background-color: #e9e9e9; color: #444;")
             except ValueError:
-                QMessageBox.critical(self, "Error", "Incorrect input/value, try again.")
+                # If fields are currently empty or invalid during typing, just wait
+                self.interval_input.setText("0.000000")
+        else:
+            self.interval_input.setReadOnly(False)
+            self.interval_input.setStyleSheet("")
+
+    def load_remembered_values(self):
+        """Retrieves last used values from disk or uses defaults if none exist."""
+        last_start = self.settings.value(f"{self.settings_key}/start", str(self.start))
+        last_end = self.settings.value(f"{self.settings_key}/end", str(self.end))
+        last_interval = self.settings.value(f"{self.settings_key}/interval", str(self.end - self.start))
+
+        self.start_input.setText(str(last_start))
+        self.end_input.setText(str(last_end))
+        self.interval_input.setText(str(last_interval))
+
+    def save_current_values(self, start, end, interval):
+        """Commits the current validated values to persistent storage."""
+        self.settings.setValue(f"{self.settings_key}/start", start)
+        self.settings.setValue(f"{self.settings_key}/end", end)
+        self.settings.setValue(f"{self.settings_key}/interval", interval)
+
+    def get_values(self):
+        """Validates inputs, saves them to settings, and accepts the dialog."""
+        if self.default_checkbox.isChecked():
+            start, end, interval = self.start, self.end, (self.end - self.start)
+            self.result = (start, end, interval)
+            self.save_current_values(start, end, interval)
+            self.accept()
+            return
+
+        try:
+            # 1. Parse current inputs
+            start = float(self.start_input.text())
+            end = float(self.end_input.text())
+            interval = float(self.interval_input.text())
+
+            # 2. Hard Bounds Check
+            if end > self.end:
+                end = self.end
+                print(f"Clamped 'end' to recording max: {self.end}")
+
+            # 3. Logic Validation
+            if not (0.0 <= self.start <= start < end):
+                QMessageBox.critical(
+                    self, "Invalid Range",
+                    f"Start ({start}) must be >= 0 and less than End ({end})."
+                    )
+                return
+
+            if interval <= 0.0:
+                QMessageBox.critical(self, "Invalid Interval", "Interval must be greater than 0.")
+                return
+
+            # Ensure interval isn't physically larger than the selected window
+            if interval > (end - start):
+                interval = end - start
+                print("Clamped 'interval' to current window size.")
+
+            # 4. Finalize
+            self.result = (start, end, interval)
+            self.save_current_values(start, end, interval)
+            self.accept()
+
+        except ValueError:
+            QMessageBox.critical(self, "Format Error", "Please enter valid numeric values.")
 
     def closeEvent(self, event):
-        # Remove closeEvent, accept() handles it.
+        # Default behavior is fine, super handles clean-up
         super().closeEvent(event)
 
 
@@ -372,36 +502,57 @@ class ConstDialog(QDialog):
                 label = QLabel(key)
                 label.setMinimumWidth(160)
 
-                # Dynamically calculate ranges and decimal steps
-                if isinstance(value, int):
-                    decimals = 0
-                    step = 1
-                    max_val = abs(value) * 100 if value != 0 else 100
-                    min_val = -max_val
-                else:
-                    val_str = f"{value:.6f}".rstrip('0')
-                    decimals = 1 if val_str.endswith('.') else len(val_str.split('.')[1])
-                    decimals = max(2, min(decimals, 6))
-                    step = 10 ** -decimals
-                    max_val = abs(value) * 1000 if value != 0 else 1.0
-                    min_val = -max_val
+                # 1. Apply your strict rules
+                decimals = 4
+                step = 0.0001
 
+                # Set max_val to 1000x the value (with a default if value is 0)
+                if value == 0:
+                    max_val = 1000.0
+                else:
+                    max_val = abs(value) * 1000.0
+
+                min_val = -max_val
+
+                # 2. Configure Spinbox
                 spinbox = QDoubleSpinBox()
                 spinbox.setDecimals(decimals)
                 spinbox.setRange(min_val, max_val)
                 spinbox.setSingleStep(step)
                 spinbox.setMinimumWidth(130)
-                spinbox.setValue(value)
+                spinbox.setValue(float(value))
 
+                # 3. Configure Slider (Normalized to 10,000 steps for smooth UI)
                 slider = QSlider(Qt.Orientation.Horizontal)
                 slider.setMaximumWidth(150)
-                scale_factor = 10 ** decimals
-                slider.setRange(int(min_val * scale_factor), int(max_val * scale_factor))
-                slider.setValue(int(value * scale_factor))
+                slider_steps = 10000
+                slider.setRange(0, slider_steps)
 
-                # Link slider and spinbox together
-                slider.valueChanged.connect(lambda v, sb=spinbox, sf=scale_factor: sb.setValue(v / sf))
-                spinbox.valueChanged.connect(lambda v, sl=slider, sf=scale_factor: sl.setValue(int(v * sf)))
+                # Calculate initial slider position
+                try:
+                    initial_slider_pos = int(((value - min_val) / (max_val - min_val)) * slider_steps)
+                except ZeroDivisionError:
+                    initial_slider_pos = slider_steps // 2
+                slider.setValue(initial_slider_pos)
+
+                # 4. Link Slider and Spinbox with signals blocked to prevent recursion loops
+                def update_spinbox(v, sb=spinbox, mn=min_val, mx=max_val, steps=slider_steps):
+                    real_val = mn + (v / steps) * (mx - mn)
+                    sb.blockSignals(True)
+                    sb.setValue(real_val)
+                    sb.blockSignals(False)
+
+                def update_slider(v, sl=slider, mn=min_val, mx=max_val, steps=slider_steps):
+                    try:
+                        s_val = int(((v - mn) / (mx - mn)) * steps)
+                    except ZeroDivisionError:
+                        s_val = steps // 2
+                    sl.blockSignals(True)
+                    sl.setValue(s_val)
+                    sl.blockSignals(False)
+
+                slider.valueChanged.connect(update_spinbox)
+                spinbox.valueChanged.connect(update_slider)
 
                 self.spinboxes[key] = spinbox
 
@@ -409,7 +560,6 @@ class ConstDialog(QDialog):
                 h_layout.addWidget(slider)
                 h_layout.addWidget(spinbox)
                 layout.addLayout(h_layout)
-
             else:
                 # --- Standard Text UI ---
                 h_layout = QHBoxLayout()
@@ -476,142 +626,67 @@ class ConstDialog(QDialog):
                 QListWidgetItem(str(item), self.lists[key])
 
     def select_file(self):
-        print(f"Delete after {self.title=}")
+        """
+        Loads a JSON configuration file and updates the dialog's settings.
+        """
+        import os
+        from PyQt6.QtWidgets import QMessageBox
+        from lib_utility import get_previous_folder, save_previous_folder, load_dict
+
+        # Local import to prevent circularity if open_file_dialog is not globally available
+
         previous_folder = get_previous_folder(self.title)
-        print(f"Delete after {previous_folder=}")
         if not previous_folder:
             previous_folder = os.path.expanduser("~")
-            print(f"Delete after ~{previous_folder=}")
+
         try:
+            # Note the custom filter is set strictly to JSON
             file_path, _ = open_file_dialog(self, previous_folder, "JSON Files (*.json)")
-            print(f"Delete after {file_path=}")
+
             if file_path:
                 save_previous_folder(os.path.dirname(file_path), self.title)
 
-                # 1. Load the new data directly into the result dictionary
+                # 1. Load the new configuration directly into the result dictionary
                 loaded_dict = load_dict(file_path, self.result)
-                print(f"Delete after {loaded_dict=}")
                 self.result = loaded_dict.copy()
 
-                # 2. Skip the UI rebuild entirely and just close the dialog!
+                self.status_label.setText(f"Loaded config: {os.path.basename(file_path)}")
+
+                # 2. Accept the dialog so the main application can process the new settings
                 self.accept()
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error loading file: {e}")
-            print(f"Delete after Error loading file: {e}")
+            QMessageBox.critical(self, "Error", f"Error loading configuration: {e}")
             self.status_label.setText(f"Error loading file: {e}")
+    # def select_file(self):
+    #     print(f"Delete after {self.title=}")
+    #     previous_folder = get_previous_folder(self.title)
+    #     print(f"Delete after {previous_folder=}")
+    #     if not previous_folder:
+    #         previous_folder = os.path.expanduser("~")
+    #         print(f"Delete after ~{previous_folder=}")
+    #     try:
+    #         file_path, _ = open_file_dialog(self, previous_folder, "JSON Files (*.json)")
+    #         print(f"Delete after {file_path=}")
+    #         if file_path:
+    #             save_previous_folder(os.path.dirname(file_path), self.title)
+    #
+    #             # 1. Load the new data directly into the result dictionary
+    #             loaded_dict = load_dict(file_path, self.result)
+    #             print(f"Delete after {loaded_dict=}")
+    #             self.result = loaded_dict.copy()
+    #
+    #             # 2. Skip the UI rebuild entirely and just close the dialog!
+    #             self.accept()
+    #
+    #     except Exception as e:
+    #         QMessageBox.critical(self, "Error", f"Error loading file: {e}")
+    #         print(f"Delete after Error loading file: {e}")
+    #         self.status_label.setText(f"Error loading file: {e}")
 
     def closeEvent(self, event):
         # Remove closeEvent, accept() handles it.
         super().closeEvent(event)
-
-# @get_from_dialog
-# class ConstDialog(QDialog):
-#
-#     def __init__(self, param_dict, title, parent=None):
-#         super().__init__(parent)
-#         self.result = param_dict.copy()
-#         self.title = title
-#         self.line_edits = {}
-#         self.checkboxes = {}
-#         self.lists = {}
-#         self.status_label = QLabel("")
-#         self.init_ui()
-#
-#     def init_ui(self):
-#         self.setWindowTitle(self.title)
-#         print(f"Running init_ui ...")
-#         main_layout = QVBoxLayout()
-#
-#         scroll_area = QScrollArea()
-#         scroll_widget = QWidget()
-#         layout = QVBoxLayout(scroll_widget)
-#
-#         for key, value in self.result.items():
-#             key_label = QLabel(key)
-#             layout.addWidget(key_label)
-#             if isinstance(value, list):
-#                 self.lists[key] = QListWidget()
-#                 for item in value:
-#                     QListWidgetItem(str(item), self.lists[key])
-#                 layout.addWidget(self.lists[key])
-#                 edit_button = QPushButton(f'Edit {key}')
-#                 edit_button.clicked.connect(lambda checked, k=key: self.edit_list(k))
-#                 layout.addWidget(edit_button)
-#             elif isinstance(value, bool):
-#                 checkbox = QCheckBox()
-#                 checkbox.setChecked(value)
-#                 checkbox.setToolTip("Use several intervals if you activate this option: i.e. interval=600.")
-#                 self.checkboxes[key] = checkbox
-#                 layout.addWidget(checkbox)
-#             else:
-#                 line_edit = QLineEdit(str(value))
-#                 self.line_edits[key] = line_edit
-#                 layout.addWidget(line_edit)
-#
-#         scroll_area.setWidget(scroll_widget)
-#         scroll_area.setWidgetResizable(True)
-#         main_layout.addWidget(scroll_area)
-#
-#         ok_button = QPushButton("OK")
-#         ok_button.clicked.connect(self.accept_and_save)
-#         main_layout.addWidget(ok_button)
-#         cancel_button = QPushButton("Cancel")
-#         cancel_button.clicked.connect(self.reject)
-#         main_layout.addWidget(cancel_button)
-#         load_button = QPushButton("Load configuration")
-#         load_button.clicked.connect(self.select_file)
-#         main_layout.addWidget(load_button)
-#
-#         self.setLayout(main_layout)
-#
-#     def accept_and_save(self):
-#         for key, line_edit in self.line_edits.items():
-#             try:
-#                 # Handle string values like 'z'
-#                 if line_edit.text().isalpha():
-#                     self.result[key] = line_edit.text()
-#                 else:
-#                     self.result[key] = float(line_edit.text()) if '.' in line_edit.text() else int(line_edit.text())
-#             except ValueError:
-#                 QMessageBox.critical(self, "Error", f"Invalid value for {key}")
-#                 return
-#         for key, checkbox in self.checkboxes.items():
-#             self.result[key] = checkbox.isChecked()
-#
-#         self.accept()
-#
-#     def edit_list(self, key):
-#         list_dialog = ListEditDialog(self.result[key])
-#         if list_dialog.exec() == QDialog.DialogCode.Accepted:
-#             self.result[key] = list_dialog.result
-#             self.lists[key].clear()
-#             for item in self.result[key]:
-#                 QListWidgetItem(str(item), self.lists[key])
-#
-#     def select_file(self):
-#         previous_folder = get_previous_folder(self.title)
-#         if not previous_folder:
-#             previous_folder = os.path.expanduser("~")
-#         try:
-#             file_path, _ = open_file_dialog(self, previous_folder, "JSON Files (*.json)")
-#             if file_path:
-#                 save_previous_folder(os.path.dirname(file_path), self.title)
-#                 loaded_dict = load_dict(file_path, self.result)
-#                 self.result = loaded_dict.copy()
-#                 self.line_edits = {}
-#                 self.checkboxes = {}
-#                 self.status_label = QLabel("")
-#                 self.init_ui()
-#                 self.accept_and_save()
-#
-#         except Exception as e:
-#             QMessageBox.critical(self, "Error", f"Error loading file: {e}")
-#             self.status_label.setText(f"Error loading file: {e}")
-#
-#     def closeEvent(self, event):
-#         # Remove closeEvent, accept() handles it.
-#         super().closeEvent(event)
 
 
 class ListEditDialog(QDialog):
@@ -659,7 +734,7 @@ class ListEditDialog(QDialog):
             self.list_widget.takeItem(index)
 
     def accept(self):
-        super().accept()  #super accept is what closes the modal dialog.
+        super().accept()  # super accept is what closes the modal dialog.
 
     def closeEvent(self, event):
         # Remove closeEvent, accept() handles it.
@@ -776,19 +851,6 @@ def manage_settings(const_file: str, const: dict):
         print("Constants-dialog canceled.")
     save_dict(const_file, loaded_dict)
     return loaded_dict
-
-# def manage_settings(const_file: str, const: dict):
-#     """Opens a stored dictionary 'const_file' to be modified. If there is no 'const_file' stored,
-#     uses 'const' as a default to begin the modification"""
-#     loaded_dict = load_dict(const_file, const)
-#     updated_const: dict = gui.ConstDialog(loaded_dict, "Event detection")
-#     if updated_const:
-#         loaded_dict.update(updated_const)
-#         print("Constants updated.")
-#     else:
-#         print("Constants dialog canceled.")
-#     save_dict(const_file, loaded_dict)
-#     return loaded_dict
 
 
 class ParameterTunerDialog(QDialog):

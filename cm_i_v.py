@@ -1,19 +1,23 @@
 #!/usr/bin/env python
 import gc
-
-import matplotlib.pyplot as plt
 import numpy as np
-from lib_event_detection import EvtPro
-from lib_utility import auto_save, get_names, make_name, average_by, make_sections, remove_outlier
-import lib_gui as gui
+from matplotlib import pyplot as plt
+from lib_event_detection import EvtPro, setup_workspace, teardown_workspace, test_main
+from lib_utility import auto_save, make_name, make_sections, smoothing, vtp
 from copy import copy as cp_copy
+
+const_file = ""
 
 # Constants for every recording
 const = dict(
         # smoothed_width=0.002,  # seconds # smooths recordings # smaller values result in noisier results
         event_type="EPSC",  # AP, EPSP, EPSC, IPSP, IPSC or Calcium
         direction=-1,
-        holding=-60,  # in mV
+        holding=-60.0,  # in mV
+        E_K=-102.0,
+        E_Cl=-75.0,
+        E_Na=74.0,
+        E_Ca2=124.0,
         beg_ar=0.02,
         end_ar=0.005,
         beg_ir=0.25,
@@ -34,10 +38,10 @@ def body(ori_inst, section):
     rec.section(start, end)
     rec.find_pulses()
     match const["event_type"]:
-        case "EPSC" | "IPSC":
+        case "EPSC" | "IPSC" | "i_event":
             print(f"{20 * ' '}Voltage clamp recording...")
             rec.get_iv(const["beg_ar"], const["end_ar"], const["beg_ir"], const["end_ir"], const["holding"])
-        case "EPSP" | "IPSP" | "AP":
+        case "EPSP" | "IPSP" | "AP" | "v_event":
             print(f"{20 * ' '}Current clamp recording... Not implemented...")
 
     return rec
@@ -53,71 +57,116 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
         total: Total time of the analysis.
         interval: Interval for sectioning the data.
     """
-    # Names and routes of the files
-    file_name, file_number, file_parent, script_name = get_names(ori_inst, __file__)
-    common_name: list = [file_name, script_name]
-    const_file = file_parent + make_name(common_name + ["const"], ".json")
-    const.update(gui.manage_settings(const_file, const))
+    # ---------------------------------------------------------
+    # STANDARDIZED SETUP BLOCK
+    # ---------------------------------------------------------
+    global const_file
+    file_parent, common_name, const_file = setup_workspace(ori_inst, __file__, const)
 
-    # total_input_res = np.array([[0, 0]])  # default values for axis match # This is called zero_arr in other scripts
-    # total_acc_res = np.array([[0, 0]])  # default values for axis match
-    # sweep_number = 1
+    # ---------------------------------------------------------
+    # SCRIPT-SPECIFIC LOGIC
+    # ---------------------------------------------------------
+    common_name += [const["event_type"]]
+
     for section in make_sections(start, total, interval):
-        # body function perform the analysis!!!!!!!
+        start_s, end_s = section
+        print(f"{section = }")
+
+        # Perform the analysis
         rec = body(ori_inst, section)
 
-    #     total_input_res = np.append(total_input_res, rec.inp_res, axis=0)
-    #
-    #     match const["event_type"]:
-    #         case "EPSC" | "IPSC":
-    #             print(f"{20 * ' '}Voltage clamp recording...")
-    #             total_acc_res = np.append(total_acc_res, rec.acc_res, axis=0)
-    #         case "EPSP" | "IPSP" | "AP":
-    #             print(f"{20 * ' '}Current clamp recording... Not implemented...")
-    #
-    # # Raw values names
-    # out_name_ri = file_parent + make_name(common_name + [sweep_number] + ["Ri"])
-    # out_name_ra = file_parent + make_name(common_name + [sweep_number] + ["Ra"])
-    # print(f"{out_name_ri = }")
-    # print(f"{out_name_ra = }")
-    #
-    # # Averages names
-    # out_name_ri_avg = file_parent + make_name(common_name + [sweep_number] + ["Ri", average_by.__name__])
-    # out_name_ra_avg = file_parent + make_name(common_name + [sweep_number] + ["Ra", average_by.__name__])
-    # out_name_rm_avg = file_parent + make_name(common_name + [sweep_number] + ["Rm", average_by.__name__])
-    # print(f"{out_name_ri_avg = }")
-    # print(f"{out_name_ra_avg = }")
-    # print(f"{out_name_rm_avg = }")
-    #
-    # plt.figure()
-    # total_input_res = total_input_res[1:].T  # removing default values for axis match
-    # plt.plot(total_input_res[0], total_input_res[1], "b", label="Input Resistance")
-    #
-    # auto_save(total_input_res.T, out_name_ri)
-    # actual_plot_increment = {"start": start, "end": total, "increment": const["plot_increment"]}
-    #
-    # avg_ires = average_by(total_input_res, actual_plot_increment)
-    # plt.plot(avg_ires[0], avg_ires[1], 'bo', label="Averaged Input Resistance")
-    # auto_save(avg_ires.T, out_name_ri_avg)
-    # match const["event_type"]:
-    #     case "EPSC" | "IPSC":
-    #         total_acc_res = total_acc_res[1:].T  # removing default values for axis match
-    #         plt.plot(total_acc_res[0], total_acc_res[1], "r", label="Access Resistance")
-    #         auto_save(total_acc_res.T, out_name_ra)
-    #         avg_ares = average_by(total_acc_res, actual_plot_increment)
-    #         avg_mres = np.copy(avg_ires)
-    #         avg_mres[1] = avg_ires[1] - avg_ares[1]
-    #         plt.plot(avg_ares[0], avg_ares[1], 'ro', label="Averaged Access Resistance")
-    #         plt.plot(avg_mres[0], avg_mres[1], 'ko', label="Averaged Membrane Resistance")
-    #         auto_save(avg_ares.T, out_name_ra_avg)
-    #         auto_save(avg_mres.T, out_name_rm_avg)
-    #     case "EPSP" | "IPSP" | "AP":
-    #         print(f"{20 * ' '}Current clamp recording... Not implemented...")
-    #
-    # plt.legend(loc='upper right')
-    # plt.show(block=False)
+        if not getattr(rec, "iv_attrs", {}):
+            print(f"No IV attributes found for section {section}. Skipping saving/plotting.")
+            teardown_workspace(rec)
+            continue
 
-    del rec
+        # Reconstruct iv_iter from the stored iv_attrs
+        iv_iter = tuple(
+                zip(
+                        [attrs["iv_time"] for attrs in rec.iv_attrs.values()],
+                        [attrs["iv_res"] for attrs in rec.iv_attrs.values()],
+                        [attrs["acc_res"] for attrs in rec.iv_attrs.values()]
+                        )
+                )
+        base_resp_0 = iv_iter[0]
+        base_resp_1 = iv_iter[1]
+        voltage_ires = rec.voltage_ires
+        n_p = vtp(0.002, rec.t_delta)
+        voltage_axis = voltage_ires + const["holding"]
+
+        # =========================================================
+        # 1. PROCESS & SAVE DATA (Chronological Order)
+        # =========================================================
+        # Initialize save list with the Voltage axis as the first column
+        iv_save_list = [voltage_axis]
+        avg_base_resp = np.average(base_resp_0[1], base_resp_1[1])
+        for pos, curr in enumerate(iv_iter):  # TODO make the average of the first to baseline traces
+            if pos:
+                raw_diff = curr[1] - base_resp_0[1]
+            else:
+                raw_diff = base_resp_0[1]
+            smoothed_diff = smoothing(raw_diff, n_p, 2)
+            iv_save_list.append(smoothed_diff)
+
+            # Stack into a 2D array: [Voltage, Current_1, Current_2, ...] and Save
+        iv_save_matrix = np.stack(iv_save_list, axis=0).T
+        out_name_iv = file_parent + make_name(common_name + [f"{start_s:0>4}_{end_s:0>4}_IV_curves"])
+        auto_save(iv_save_matrix, out_name_iv)
+
+        if const.get("plot", True):
+            # =========================================================
+            # 2. PLOT I-V GRAPH (Reversed Order for Visual Layering)
+            # =========================================================
+            fig, ax = plt.subplots()
+            i = (len(iv_save_list[1:]) - 1) * 10
+            increment = 1 / (len(iv_save_list[1:]) + 1)
+            j = increment
+
+            # TODO implement apply_by sectioning to the data I-V
+            # actual_plot_increment = {"start": start, "end": total, "increment": const["plot_increment"]}
+            # avg_ires = average_by(total_input_res, actual_plot_increment)
+            plt.axvline(const["E_K"], color="k", linestyle='--')
+            plt.axvline(const["E_Cl"], color="g", linestyle='--')
+            plt.axvline(const["E_Na"], color="b", linestyle='--')
+            plt.axvline(const["E_Ca2"], color="r", linestyle='--')
+            plt.axvline(const["holding"], color="k", linestyle=':')
+
+            for curr in reversed(iv_save_list[1:]):
+                plt.plot(voltage_axis, curr, label=f"{i}[s]", linewidth=3.0 * (0.0 + j), alpha=0.0 + j)
+                i -= 10
+                j += increment
+
+            # Formatting and Showing the I-V Plot
+            ax.spines['left'].set_position('zero')
+            ax.spines['bottom'].set_position('zero')
+            ax.spines['right'].set_visible(False)
+            ax.spines['top'].set_visible(False)
+            ax.set_xlabel('Voltage [mV]', loc='right')
+            ax.set_ylabel('Current [pA]', loc='bottom', rotation=0)
+            ax.xaxis.set_ticks_position('bottom')
+            ax.yaxis.set_ticks_position('left')
+            plt.legend()
+            plt.title(f"I-V Graph (Section: {start_s} - {end_s})")
+            plt.show(block=False)
+
+            # =========================================================
+            # 3. PLOT PULSE DIFFERENCE (Time Course)
+            # =========================================================
+            plt.figure()
+            plt.axhline(0.0, color="k", linestyle='--')
+            plt.plot(rec.time, rec.resp, "r")
+            for curr in iv_iter:
+                plt.plot(curr[0], base_resp_0[1], "g")
+                plt.plot(curr[0], curr[1] - base_resp_0[1], "b")
+                plt.plot(curr[0], np.zeros_like(voltage_ires) + base_resp_0[2], "g", linewidth=5.0)
+                plt.plot(curr[0], np.zeros_like(voltage_ires) + curr[2], "k", linewidth=3.0)
+            plt.title(f"Pulse difference (Section: {start_s} - {end_s})")
+            plt.show(block=False)
+
+        # ---------------------------------------------------------
+        # STANDARDIZED TEARDOWN BLOCK
+        # ---------------------------------------------------------
+        teardown_workspace(rec)
 
     # Manually trigger garbage collection
     collected = gc.collect()
@@ -126,20 +175,4 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
 
 
 if __name__ == "__main__":
-    # For testing purposes
-    from PyQt6.QtWidgets import QApplication
-    import sys
-    import os
-    from lib_utility import get_previous_folder, save_previous_folder
-
-    app = QApplication(sys.argv)
-    previous_folder = get_previous_folder()
-    if not previous_folder:
-        previous_folder = os.path.expanduser("~")
-    file_path_out, _ = gui.open_file_dialog(None, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
-    if file_path_out:
-        save_previous_folder(os.path.dirname(file_path_out))
-        original = EvtPro(file_path_out, True)
-        gui.show_plot(original, title="Select the time of the sections: ")
-        bound: int = int(original.time[-1])
-        main(original, 0, bound, bound)
+    test_main(main)

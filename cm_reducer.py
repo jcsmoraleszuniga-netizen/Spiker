@@ -1,10 +1,13 @@
 import gc
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 import lib_gui as gui
-from lib_event_detection import EvtPro
-from lib_utility import auto_save, make_name, make_sections, replace, file_info
+from lib_event_detection import EvtPro, setup_workspace, teardown_workspace
+from lib_utility import auto_save, get_names, make_name, make_sections
 from copy import copy as cp_copy
+
+const_file = ""
 
 # Variables for every recording
 const = dict(
@@ -32,7 +35,7 @@ def body(ori_inst: EvtPro, section: tuple[int, int]) -> EvtPro:
 
     if not const["with_threshold"]:
         print(f"Using traditional reduction")
-        rec.down_sample(const["down_sample"])
+        rec.down_sample(int(const["down_sample"]))
     elif const["with_threshold"]:
         print(f"Using smart reduction")
         rec.get_pk_noise(
@@ -53,29 +56,24 @@ def body(ori_inst: EvtPro, section: tuple[int, int]) -> EvtPro:
 
 
 def main(ori_inst, start=0, total=1800, interval=600):
-    file_name: str = ori_inst.get_info('file', 'name')
-    file_name = replace(".", "_", file_name)
-    print(f"{file_name = }")
-    file_parent: str = ori_inst.get_info('file', 'parent')
-    print(f"{file_parent = }")
-    file_path: str = ori_inst.get_info('file', 'path')
-    print(f"{file_path = }")
-    script_name: str = file_info(__file__, 'name')
-    script_name = replace(".", "_", script_name)  # Dot removal
-    print(f"{script_name = }")
+    # # ---------------------------------------------------------
+    # # STANDARDIZED SETUP BLOCK (Copied from Events Analysis)
+    # # ---------------------------------------------------------
+    global const_file
+    # Call the general setup. It returns the file_parent, common_name, and the const_file path
+    file_parent, common_name, const_file = setup_workspace(ori_inst, __file__, const)
 
-    const_file = file_path + script_name + "_const.json"
-    # Loads the dictionary from the binary file if exists
-    const.update(gui.manage_settings(const_file, const))
-
+    # ---------------------------------------------------------
+    # SCRIPT-SPECIFIC LOGIC
+    # ---------------------------------------------------------
+    # Use common_name to build the specific downsampling output name
     out_name_ds = file_parent + make_name(
-            [
-                    file_name,
+            common_name + [
                     f"{start:>0.0f}",
                     f"{total:>0.0f}",
-                    f"{const["down_sample"]:>0.0f}",
+                    f"{const['down_sample']:>0.0f}",
                     "downsampled",
-                    f"{const["with_threshold"]}"
+                    f"{const['with_threshold']}"
                     ]
             )
     print(f"{out_name_ds = }")
@@ -83,23 +81,46 @@ def main(ori_inst, start=0, total=1800, interval=600):
     rec = cp_copy(ori_inst)
     rec.clean()
     for section in make_sections(start, total, interval):
-        rec + body(ori_inst, section)
+        rec = body(ori_inst, section)
 
-    plt.figure()
-    plt.axhline(y=0.0, color="k", linestyle='--')
-    plt.plot(ori_inst.time, ori_inst.resp, "k", label="Original")
-    plt.plot(rec.time, rec.resp, "r", label="Cleaned", alpha=0.9)
-    plt.legend()
-    plt.title(f"Original vs Reduced.")
-    plt.show(block=False)
-
+    # Save immediately before the plot pauses the script
     auto_save(np.array([rec.time, rec.resp]).T, out_name_ds)
 
-    del rec
-    # Manually trigger garbage collection
-    collected = gc.collect()
-    print(f"Garbage collector collected {collected} objects.")
-    print("Memory should now be freed (though the OS might not immediately show it).")
+    # ---------------------------------------------------------
+    # MEMORY-SAFE PLOTTING & SCORCHED EARTH TEARDOWN
+    # ---------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(15, 7.5))  # Explicitly grab fig and ax
+
+    ax.axhline(y=0.0, color="k", linestyle='--')
+    ax.plot(ori_inst.time, ori_inst.resp, "k", label="Original")
+    ax.plot(rec.time, rec.resp, "r", label="Cleaned", alpha=0.9)
+    ax.legend()
+    ax.set_title("Original vs Reduced.")
+
+    # 1. Show the window without triggering the global block
+    plt.show(block=False)
+    fig.canvas.draw()
+
+    # 2. Pass 'event' and use 'event.canvas' to avoid closure circular reference
+    def on_close(event):
+        event.canvas.stop_event_loop()
+
+    cid = fig.canvas.mpl_connect('close_event', on_close)
+
+    # 3. Start Matplotlib's internal loop (Pauses script until window is closed)
+    fig.canvas.start_event_loop(timeout=0)
+
+    # 4. Scorched Earth RAM Clearing
+    fig.canvas.mpl_disconnect(cid)
+    fig.clear()
+    plt.close(fig)
+    plt.close('all')
+
+    # Explicitly delete the local variables holding the plot objects
+    del fig, ax
+
+    # 3. One line to handle all garbage collection
+    teardown_workspace(rec)
 
 
 if __name__ == "__main__":

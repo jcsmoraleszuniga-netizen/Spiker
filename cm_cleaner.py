@@ -9,7 +9,13 @@ from copy import copy as cp_copy
 
 const = dict(
         direction=-1,
+        delete_pulses=True,
         pulse_length=0.75,
+        delete_artifacts=True,
+        artifacts_at=[
+                606.132, 1205.995, 1806.266, 2406.194
+                ],  # in seconds
+        artifact_width=0.015,  # in seconds
         )
 
 
@@ -23,9 +29,11 @@ def body(ori_inst: EvtPro, section: tuple[int, int]) -> EvtPro:
     # ori, rec = make_instances(ori_inst, const["direction"], start, end, 2)
     rec = cp_copy(ori_inst)  # Instantiation of the recordings
     rec.section(start, end)
-    rec.find_pulses()
-    rec.del_pulses(const["pulse_length"])
-
+    if const["delete_pulses"]:
+        rec.find_pulses()
+        rec.del_pulses(const["pulse_length"])
+    if const["delete_artifacts"]:
+        rec.del_artifacts(const["artifacts_at"], const["artifact_width"])
     return rec
 
 

@@ -1,11 +1,13 @@
 import copy
 import functools
+import gc
 import json
 import re
 import timeit
+import warnings
 from itertools import pairwise
 from pathlib import Path
-from tkinter import filedialog
+# from tkinter import filedialog
 import numpy as np
 from numba import njit
 from numpy import diff, exp, array, nanmean, std, arange, ones, stack, trapz, where, zeros, mean, median, \
@@ -26,19 +28,42 @@ def timing(function: Callable):
     @functools.wraps(function)
     def elapsed(*args):
         start = timeit.default_timer()
-        print(f"{function.__name__:->30}")
+        print(f"{function.__name__:->40}")
         result = function(*args)
         total_time = timeit.default_timer() - start
-        print(f"{function.__name__:+>40} {total_time = :.5f}")
+        print(f"{function.__name__:+>60} {total_time = :.5f}")
         return result
 
     return elapsed
 
 
 @njit
-def vtp(value: float | np.floating, value_increment: float | np.floating) -> int | np.integer:
+def vtp(time_value: float | np.floating, time_increment: float | np.floating) -> int | np.integer:
     """Transform Values To Points, given an increment"""
-    return int(value / value_increment)
+    return int(time_value / time_increment)
+
+
+def vtp_relative(time_value: float | np.floating, time_array: NDArray[np.floating]) -> int:
+    """Transform Values To Points, optimized for sorted time arrays using binary search."""
+
+    # 1. Find the index where the value would be inserted to maintain order
+    idx = np.searchsorted(time_array, time_value)
+
+    # 2. Handle edge cases where the value is out of the array's bounds
+    if idx == 0:
+        return 0
+    if idx == len(time_array):
+        return len(time_array) - 1
+
+    # 3. Compare the point before the index and the point at the index
+    # We don't need absolute values here because we know the order of the elements
+    left_diff = time_value - time_array[idx - 1]
+    right_diff = time_array[idx] - time_value
+
+    if left_diff < right_diff:
+        return int(idx - 1)
+    else:
+        return int(idx)
 
 
 def ptv(value: int | np.integer, value_increment: float | np.floating) -> float | np.floating:
@@ -112,6 +137,11 @@ def conv_vector(n_p: int, c_type: str = 'g', sharpness: float = 2.0) -> NDArray[
         # FIX 2: Force perfect normalization instead of crashing
         conv /= np.sum(conv)
 
+        # plt.figure()  # for testing purposes
+        # plt.plot(x, conv)
+        # plt.title(f"Convolution kernel, delete me after... {n_p=} {sharpness=} {np.sum(conv)}")
+        # plt.show()
+
     elif c_type == 'f':  # Flat (Boxcar) convolution vector
         conv = np.ones(n_p) / n_p
 
@@ -121,8 +151,6 @@ def conv_vector(n_p: int, c_type: str = 'g', sharpness: float = 2.0) -> NDArray[
     return conv
 
 
-# @timing
-# @njit
 def crossing_point(arr: NDArray[np.floating]) -> int | None:
     """Returns the first position where the array intersects with 0.0 using vectorization."""
     if arr.size < 2:
@@ -146,18 +174,6 @@ def crossing_point(arr: NDArray[np.floating]) -> int | None:
 
 
 # @timing
-# def find_over_threshold(  # It's faster without @njit.
-#         response: NDArray[np.floating], threshold: NDArray[np.floating], direction: int
-#         ) -> NDArray[np.floating]:
-#     events_over_threshold: NDArray[np.floating] = array([])
-#     stacked: NDArray[np.floating] = stack((response, threshold), axis=0)
-#     if direction > 0:
-#         events_over_threshold = np.max(stacked, axis=0) - threshold
-#     elif direction < 0:
-#         events_over_threshold = np.min(stacked, axis=0) - threshold
-#     return where(np.abs(events_over_threshold) > 0, 1, 0)
-
-# @timing
 def find_over_threshold(
         response: NDArray[np.floating], threshold: NDArray[np.floating], direction: int
         ) -> NDArray[np.floating]:
@@ -172,71 +188,155 @@ def find_over_threshold(
     return np.where(events_over_threshold, 1, 0)
 
 
-# @timing
-# @njit
-def find_peaks(
+def find_peaks_and_boundaries(
         over_threshold: NDArray[np.floating], response: NDArray[np.floating], direction: int,
-        search_width: float | np.floating = 0.0, time_increment: float | np.floating = 0.0
-        ) -> NDArray[np.floating]:
-    # 1. Create the empty peaks array
-    peaks = np.zeros_like(over_threshold)
+        ) -> tuple[NDArray[np.floating], list[tuple[int, int, int]]]:
+    """
+    Finds peaks, their areas, and their boundaries in a single vectorized pass.
 
-    # 2. Label the contiguous sectors of 1s
-    # (Checking > 0 ensures it works even if over_threshold contains floats like 1.0)
+    Returns:
+        tuple containing:
+        - peaks (NDArray): Array with calculated sector areas located at peak indices.
+        - boundaries (list[tuple]): List of (peak_index, start_index, end_index).
+    """
+    # 1. Initialize outputs
+    peaks = np.zeros_like(over_threshold)
+    boundaries_and_peaks = []
+
+    # 2. Label the contiguous sectors
     labeled_array, num_features = label(over_threshold > 0)
+
+    if num_features == 0:
+        return peaks, boundaries_and_peaks
 
     # 3. Get the exact slice objects for every sector instantly
     slices = find_objects(labeled_array)
 
-    # 4. Iterate through the slices and find the peak in each
+    # 4. Iterate through the slices
     for sl in slices:
         if sl is None:
             continue
 
-        # find_objects returns a tuple of slices per dimension. We just need the first one (1D).
         sector_slice = sl[0]
+        start_idx = sector_slice.start
+        end_idx = sector_slice.stop  # Exclusive upper bound
 
-        # Instantly slice out the response data for this specific sector
         sector_response = response[sector_slice]
+
+        # Calculate the area representation of this sector
+        sector_area = np.sum(np.abs(over_threshold[sector_slice]))
 
         # 5. Find the local index of the max/min within this isolated sector
         if direction == 1:
-            local_peak_idx = np.argmax(sector_response)
+            local_peak_idx = int(np.argmax(sector_response))
         elif direction == -1:
-            local_peak_idx = np.argmin(sector_response)
+            local_peak_idx = int(np.argmin(sector_response))
         else:
             print("Wrong direction")
-            return peaks
+            return peaks, []
 
-        # 6. Map the local index back to the global array using the slice's start position
-        global_peak_idx = sector_slice.start + local_peak_idx
-        peaks[global_peak_idx] = 1
+        # 6. Map to global index
+        global_peak_idx = start_idx + local_peak_idx
 
-    return peaks
+        # 7. Populate both data structures
+        peaks[global_peak_idx] = sector_area
+        boundaries_and_peaks.append((global_peak_idx, start_idx, end_idx))
 
-
+    return peaks, boundaries_and_peaks
+# @timing
+# @njit
 # def find_peaks(
 #         over_threshold: NDArray[np.floating], response: NDArray[np.floating], direction: int,
-#         search_width: float | np.floating, time_increment: float | np.floating
 #         ) -> NDArray[np.floating]:
-#     peaks: NDArray[np.floating] = zeros(len(over_threshold))
-#     half_width: int = max(1, vtp(search_width / 2, time_increment))
-#     quart_width: int = max(1, vtp(search_width / 4, time_increment))
-#     for pos in range(half_width + 1, len(over_threshold)):  # In case a peak is at "0" position
-#         if over_threshold[pos]:
-#             window = response[pos - quart_width: pos + half_width]
-#             match direction:
-#                 case -1:
-#                     if np.min(window) == response[pos]:
-#                         peaks[pos - quart_width: pos + half_width] = 0
-#                         peaks[pos] = 1
-#                 case 1:
-#                     if np.max(window) == response[pos]:
-#                         peaks[pos - quart_width: pos + half_width] = 0
-#                         peaks[pos] = 1
-#                 case _:
-#                     print("Wrong direction")
+#     # 1. Create the empty peaks array
+#     peaks = np.zeros_like(over_threshold)
+#
+#     # 2. Label the contiguous sectors
+#     labeled_array, num_features = label(over_threshold > 0)
+#
+#     if num_features == 0:
+#         return peaks
+#
+#     # 3. Get the exact slice objects for every sector instantly
+#     slices = find_objects(labeled_array)
+#
+#     # 4. Iterate through the slices and find the peak in each
+#     for sl in slices:
+#         if sl is None:
+#             continue
+#
+#         sector_slice = sl[0]
+#         sector_response = response[sector_slice]
+#
+#         # Calculate the area representation of this sector
+#         # np.abs ensures the area is positive and comparable regardless of polarity
+#         sector_area = np.sum(np.abs(over_threshold[sector_slice]))
+#
+#         # 5. Find the local index of the max/min within this isolated sector
+#         if direction == 1:
+#             local_peak_idx = np.argmax(sector_response)
+#         elif direction == -1:
+#             local_peak_idx = np.argmin(sector_response)
+#         else:
+#             print("Wrong direction")
+#             return peaks
+#
+#         # 6. Map the local index back to the global array and assign the area weight
+#         global_peak_idx = sector_slice.start + local_peak_idx
+#         peaks[global_peak_idx] = sector_area
+#
 #     return peaks
+#
+#
+# def find_peak_boundaries(
+#         over_threshold: NDArray[np.floating], response: NDArray[np.floating], direction: int,
+#         ) -> list[tuple[int, int, int]]:
+#     """
+#     Finds peaks and the boundaries of the area surrounding them.
+#
+#     Returns:
+#         list[tuple[int, int, int]]: A list containing tuples of
+#         (peak_index, start_index, end_index) for each detected sector.
+#         Note: end_index is exclusive, perfect for standard Python slicing (e.g., array[start:end]).
+#     """
+#     boundaries_and_peaks = []
+#
+#     # 1. Label the contiguous sectors
+#     labeled_array, num_features = label(over_threshold > 0)
+#
+#     if num_features == 0:
+#         return boundaries_and_peaks
+#
+#     # 2. Get the exact slice objects for every sector instantly
+#     slices = find_objects(labeled_array)
+#
+#     # 3. Iterate through the slices and find the peak and boundaries in each
+#     for sl in slices:
+#         if sl is None:
+#             continue
+#
+#         sector_slice = sl[0]
+#         start_idx = sector_slice.start
+#         end_idx = sector_slice.stop  # This is the exclusive upper bound
+#
+#         sector_response = response[sector_slice]
+#
+#         # 4. Find the local index of the max/min within this isolated sector
+#         if direction == 1:
+#             local_peak_idx = int(np.argmax(sector_response))
+#         elif direction == -1:
+#             local_peak_idx = int(np.argmin(sector_response))
+#         else:
+#             print("Wrong direction")
+#             return []
+#
+#         # 5. Map the local index back to the global array
+#         global_peak_idx = start_idx + local_peak_idx
+#
+#         # 6. Store the peak and its surrounding boundaries
+#         boundaries_and_peaks.append((global_peak_idx, start_idx, end_idx))
+#
+#     return boundaries_and_peaks
 
 
 # @timing
@@ -281,15 +381,15 @@ def remove_outlier(array_2d: NDArray[np.floating]) -> NDArray[np.floating]:
     return delete(array_2d, find_outliers(array_2d.T[1]), axis=0)
 
 
-@timing
-def save(arr: iter, title_="save") -> None:
-    """Pop up a file dialog to save the list of values"""
-    files = [('All Files', '*.*'), ('CSV Files', '*.csv'), ('Text Document', '*.txt')]
-    file_name = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=files, title=title_)
-    savetxt(file_name, arr, delimiter=',')
+# @timing
+# def save(arr: iter, title_="save") -> None:
+#     """Pop up a file dialog to save the list of values"""
+#     files = [('All Files', '*.*'), ('CSV Files', '*.csv'), ('Text Document', '*.txt')]
+#     file_name = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=files, title=title_)
+#     savetxt(file_name, arr, delimiter=',')
 
 
-@timing
+# @timing
 def auto_save(arr: iter, file_name='default') -> None:
     """Save the list of values automatically"""
     savetxt(file_name, arr, delimiter=',')
@@ -379,13 +479,14 @@ def make_sections(
 # @timing
 def apply_by_continuous(
         function: callable,
-        arr: NDArray[NDArray[np.floating]],
+        arr: NDArray[np.floating],  # arr[time, resp]
         increment: dict,
         ) -> NDArray[NDArray[np.floating]]:
     """Calculates the average value for a certain increment in time.
     If no values are found in that increment then the value is 0.0"""
-    local_vtp = vtp
-    d_t = round(float(arr[0][1] - arr[0][0]), 5)
+    # local_vtp = vtp
+    local_vtp = vtp_relative
+    # d_t = round(float(arr[0][1] - arr[0][0]), 5)
     increment["start"] = arr[0][0]
     increment["end"] = arr[0][-1]
     interv = [p_time for p_time in arange(increment["start"], increment["end"], increment["increment"])]
@@ -393,7 +494,8 @@ def apply_by_continuous(
             [
                     [
                             sum(pair) / 2,
-                            function(arr[1][local_vtp(pair[0] - arr[0][0], d_t):local_vtp(pair[1] - arr[0][0], d_t)])
+                            function(arr[1][local_vtp(pair[0], arr[0]):local_vtp(pair[1], arr[0])])
+                            # function(arr[1][local_vtp(pair[0] - arr[0][0], d_t):local_vtp(pair[1] - arr[0][0], d_t)])
                             ]
                     for pair in pairwise(interv)
                     ]
@@ -534,15 +636,23 @@ def event_aft(arr: NDArray[NDArray[np.floating]], increment: dict) -> NDArray[ND
     return counts
 
 
-@timing
 def save_plot(
         values, name_params: dict, units: str, plot_increment: dict, bins: int, func: callable, plot=True
         ) -> None:
-    """Saves the data and plots it."""
+    """Saves the data and plots it, ensuring unique names for burst/isolated subsets."""
 
     # ---------------------------------------------------------
-    # 1. UPPER SAVING LOGIC (From original)
+    # CRITICAL FIX 1: The Early Exit Guard
+    # Check if values is None, empty, or if the data arrays have length 0.
     # ---------------------------------------------------------
+    if values is None or len(values) < 2 or len(values[0]) == 0 or len(values[1]) == 0:
+        print(f"  -> Skipping save/plot for {name_params.get('analysis_type', 'Unknown')}: No data points available.")
+        return  # Exit the function immediately!
+
+    # Sanitize the array (converts any internal Nones to np.nan)
+    values = np.array(values, dtype=float)
+
+    # 1. CALCULATE VALUES
     if callable(func):
         func_values = func(values, plot_increment)
         func_name = func.__name__
@@ -550,119 +660,191 @@ def save_plot(
         func_values = values
         func_name = ""
 
-    out_name = name_params["file_parent"] + make_name(
-            name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"]]
-            )
-    out_name_mean = name_params["file_parent"] + make_name(
-            name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"], func_name]
-            )
+    # 2. GENERATE UNIQUE FILENAMES
+    # Sanitize the analysis_type (remove spaces/dashes) for a clean filename
+    clean_type = name_params["analysis_type"].replace(" - ", "_").replace(" ", "_").replace("*", "_")
 
-    print(f"{out_name = }")
-    print(f"{out_name_mean = }")
+    # We add clean_type to the list to prevent EPSC_Amplitude and Burst_AP_Amplitude from colliding
+    base_name_list = name_params["common_name"] + [name_params["sweep_number"], clean_type, name_params["parameter"]]
 
+    out_name = name_params["file_parent"] + make_name(base_name_list)
+    out_name_mean = name_params["file_parent"] + make_name(base_name_list + [func_name])
+
+    # 3. SAVE DATA
     if callable(func):
         auto_save(values.T, out_name)
         auto_save(func_values.T, out_name_mean)
     else:
         auto_save(values.T, out_name)
 
-    mean_val = mean(values[1])
-    median_val = median(values[1])
+    # ---------------------------------------------------------
+    # CRITICAL FIX 2: NaN-Safe Stats Calculation
+    # ---------------------------------------------------------
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        mean_val = np.nanmean(values[1])
+        median_val = np.nanmedian(values[1])
 
-    # ---------------------------------------------------------
-    # 2. PLOTTING & RAM CLEARING LOGIC (New)
-    # ---------------------------------------------------------
+    # 4. PLOTTING
     if plot:
         plt.rcParams.update({'font.size': 8})
 
-        # ASYNC RAM CLEARING CALLBACK
         def on_close(event):
             event.canvas.figure.clear()
             plt.close(event.canvas.figure)
-            import gc
-
             gc.collect()
 
-        # --- Figure 1: Time Course ---
-        fig1, ax1 = plt.subplots(figsize=(3, 2.5))
-        ax1.plot(values[0], values[1], "r+", label=name_params["parameter"])
-        ax1.plot(
-                func_values[0],
-                func_values[1],
-                'bo', label=f"{func_name} {name_params['parameter']}", alpha=0.5, markersize=10
+        # Create a single figure with 1 row, 2 columns.
+        # Adjusted figsize to standard 16:9-ish proportion for split pane.
+        fig, (ax_hist, ax_time) = plt.subplots(1, 2, figsize=(7, 3))
+
+        # ---------------------------------------------------------
+        # LEFT PLOT: Histogram
+        # ---------------------------------------------------------
+        if not np.all(np.isnan(values[1])):
+            ax_hist.hist(values[1], bins=bins, color='gray', alpha=0.7)
+            if not np.isnan(mean_val):
+                ax_hist.axvline(mean_val, color='r', label=f"Mean: {mean_val:.2f}")
+            if not np.isnan(median_val):
+                ax_hist.axvline(median_val, color='k', linestyle='--', label=f"Median: {median_val:.2f}")
+        else:
+            # If no valid data, plot a clean text placeholder instead of crashing
+            ax_hist.text(
+                    0.5, 0.5, 'Insufficient data\nfor histogram',
+                    ha='center', va='center', transform=ax_hist.transAxes, color='gray'
+                    )
+            ax_hist.set_yticks([])  # Hide y-axis ticks for the empty plot
+
+        ax_hist.set_title(f"Distribution: {name_params['analysis_type']}")
+        ax_hist.set_xlabel(units)
+        ax_hist.legend(prop={'size': 6})
+
+        # ---------------------------------------------------------
+        # RIGHT PLOT: Time Course
+        # ---------------------------------------------------------
+        ax_time.plot(values[0], values[1], "r+", alpha=0.3, label="Raw Events")
+        ax_time.plot(
+                func_values[0], func_values[1],
+                'bo', label=f"Binned {func_name}", alpha=0.6, markersize=8
                 )
-        ax1.axhline(0, color='g', linestyle='dashed', linewidth=1)
-        ax1.axhline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
-        ax1.axhline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
-        ax1.set_title(f"{name_params['analysis_type']} time course. {len(values[1])} events.")
-        ax1.legend()
 
-        fig1.canvas.mpl_connect('close_event', on_close)
-        fig1.show()
-        fig1.canvas.draw()
+        # Only plot the mean line if it's a valid number
+        if not np.isnan(mean_val):
+            ax_time.axhline(mean_val, color='r', linestyle='--', label=f"Mean: {mean_val:.2f}")
 
-        # --- Figure 2: Histogram ---
-        fig2, ax2 = plt.subplots(figsize=(3, 2.5))
-        ax2.hist(values[1], bins)
-        ax2.axvline(0, color='g', linestyle='dashed', linewidth=1)
-        ax2.axvline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
-        ax2.axvline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
-        ax2.set_title(f"{name_params['parameter']} ({name_params['analysis_type']}). {len(values[1])} events.")
-        ax2.legend(loc='upper right')
+        ax_time.set_title(f"{name_params['analysis_type']}\n(n={len(values[1])})")
+        ax_time.set_ylabel(units)
+        ax_time.legend(prop={'size': 6})
 
-        fig2.canvas.mpl_connect('close_event', on_close)
+        # Format spacing, hook the closing event, and show
+        plt.tight_layout()
+        fig.canvas.mpl_connect('close_event', on_close)
         plt.show(block=False)
-        fig2.canvas.draw()
 
+
+# @timing
 # def save_plot(
 #         values, name_params: dict, units: str, plot_increment: dict, bins: int, func: callable, plot=True
 #         ) -> None:
-#     """Saves the data and plots it."""
+#     """Saves the data and plots it, ensuring unique names for burst/isolated subsets."""
+#
+#     # ---------------------------------------------------------
+#     # CRITICAL FIX 1: The Early Exit Guard
+#     # Check if values is None, empty, or if the data arrays have length 0.
+#     # ---------------------------------------------------------
+#     if values is None or len(values) < 2 or len(values[0]) == 0 or len(values[1]) == 0:
+#         print(f"  -> Skipping save/plot for {name_params.get('analysis_type', 'Unknown')}: No data points available.")
+#         return  # Exit the function immediately!
+#
+#     # Sanitize the array (converts any internal Nones to np.nan)
+#     values = np.array(values, dtype=float)
+#
+#     # 1. CALCULATE VALUES
 #     if callable(func):
 #         func_values = func(values, plot_increment)
 #         func_name = func.__name__
 #     else:
 #         func_values = values
 #         func_name = ""
-#     out_name = name_params["file_parent"] + make_name(
-#             name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"]]
-#             )
-#     out_name_mean = name_params["file_parent"] + make_name(
-#             name_params["common_name"] + [name_params["sweep_number"]] + [name_params["parameter"], func_name]
-#             )
-#     print(f"{out_name = }")
-#     print(f"{out_name_mean = }")
+#
+#     # 2. GENERATE UNIQUE FILENAMES
+#     # Sanitize the analysis_type (remove spaces/dashes) for a clean filename
+#     clean_type = name_params["analysis_type"].replace(" - ", "_").replace(" ", "_").replace("*", "_")
+#
+#     # We add clean_type to the list to prevent EPSC_Amplitude and Burst_AP_Amplitude from colliding
+#     base_name_list = name_params["common_name"] + [name_params["sweep_number"], clean_type, name_params["parameter"]]
+#
+#     out_name = name_params["file_parent"] + make_name(base_name_list)
+#     out_name_mean = name_params["file_parent"] + make_name(base_name_list + [func_name])
+#
+#     # 3. SAVE DATA
 #     if callable(func):
 #         auto_save(values.T, out_name)
 #         auto_save(func_values.T, out_name_mean)
 #     else:
 #         auto_save(values.T, out_name)
-#     mean_val = mean(values[1])
-#     median_val = median(values[1])
+#
+#     # ---------------------------------------------------------
+#     # CRITICAL FIX 2: NaN-Safe Stats Calculation
+#     # ---------------------------------------------------------
+#     with warnings.catch_warnings():
+#         warnings.simplefilter("ignore", category=RuntimeWarning)
+#         mean_val = np.nanmean(values[1])
+#         median_val = np.nanmedian(values[1])
+#
+#     # 4. PLOTTING
 #     if plot:
-#         # Plotting time course of values
-#         plt.figure(figsize=(3, 2.5))
 #         plt.rcParams.update({'font.size': 8})
-#         plt.plot(values[0], values[1], "r+", label=name_params["parameter"])
-#         plt.plot(
-#                 func_values[0],
-#                 func_values[1],
-#                 'bo', label=f"{func_name} {name_params["parameter"]}", alpha=0.5, markersize=10
+#
+#         def on_close(event):
+#             event.canvas.figure.clear()
+#             plt.close(event.canvas.figure)
+#             gc.collect()
+#
+#         # --- Figure 1: Time Course ---
+#         fig1, ax1 = plt.subplots(figsize=(3, 3))
+#         ax1.plot(values[0], values[1], "r+", alpha=0.3, label="Raw Events")
+#         ax1.plot(
+#                 func_values[0], func_values[1],
+#                 'bo', label=f"Binned {func_name}", alpha=0.6, markersize=8
 #                 )
-#         plt.axhline(0, color='g', linestyle='dashed', linewidth=1)
-#         plt.axhline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
-#         plt.axhline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
-#         plt.title(f"{name_params["analysis_type"]} time course. {len(values[1])} events.")
-#         plt.legend()
+#
+#         # Only plot the mean line if it's a valid number
+#         if not np.isnan(mean_val):
+#             ax1.axhline(mean_val, color='r', linestyle='--', label=f"Mean: {mean_val:.2f}")
+#
+#         ax1.set_title(f"{name_params['analysis_type']}\n(n={len(values[1])})")
+#         ax1.set_ylabel(units)
+#         ax1.legend(prop={'size': 6})
+#
+#         fig1.canvas.mpl_connect('close_event', on_close)
 #         plt.show(block=False)
-#         # Histogram of values
-#         plt.figure(figsize=(3, 2.5))
-#         plt.hist(values[1], bins)
-#         plt.axvline(0, color='g', linestyle='dashed', linewidth=1)
-#         plt.axvline(mean_val, color='r', linestyle='dashed', linewidth=1, label=f"{mean_val = :.4f}{units}")
-#         plt.axvline(median_val, color='k', linestyle='dashed', linewidth=1, label=f"{median_val = :.4f}{units}")
-#         plt.title(f"{name_params["parameter"]} ({name_params["analysis_type"]}). {len(values[1])} events.")
-#         plt.legend(loc='upper right')
+#
+#         # --- Figure 2: Histogram ---
+#         fig2, ax2 = plt.subplots(figsize=(3, 2))
+#
+#         # ---------------------------------------------------------
+#         # CRITICAL FIX 3: NaN-Safe Histogram Plotting
+#         # ---------------------------------------------------------
+#         if not np.all(np.isnan(values[1])):
+#             ax2.hist(values[1], bins=bins, color='gray', alpha=0.7)
+#             if not np.isnan(mean_val):
+#                 ax2.axvline(mean_val, color='r', label=f"Mean: {mean_val:.2f}")
+#             if not np.isnan(median_val):
+#                 ax2.axvline(median_val, color='k', linestyle='--', label=f"Median: {median_val:.2f}")
+#         else:
+#             # If no valid data, plot a clean text placeholder instead of crashing
+#             ax2.text(
+#                     0.5, 0.5, 'Insufficient data\nfor histogram',
+#                     ha='center', va='center', transform=ax2.transAxes, color='gray'
+#                     )
+#             ax2.set_yticks([])  # Hide y-axis ticks for the empty plot
+#
+#         ax2.set_title(f"Distribution: {name_params['analysis_type']}")
+#         ax2.set_xlabel(units)
+#         ax2.legend(prop={'size': 6})
+#
+#         fig2.canvas.mpl_connect('close_event', on_close)
 #         plt.show(block=False)
 
 
@@ -697,6 +879,7 @@ def save_previous_folder(folder_path: str, context: str = ""):
             f.write(folder_path)
     except Exception as e:
         print(f"Failed to save folder history: {e}")
+
 
 # @timing
 # def get_previous_folder(context: str = "") -> Optional[str]:
@@ -797,41 +980,7 @@ def smoothing(resp, points, sharpness=4):
 
     # 5. Slice and return
     return result[pad_len:-pad_len]
-# def smoothing(resp, points, repetitions=1, sharpness=4):
-#     # 1. Calculate the effective points (width) for a single pass
-#     # Using the property: sigma_total = sigma * sqrt(n)
-#     print(f"Delete me after {points=} {repetitions=} {sharpness=}")
-#     eff_points = points * np.sqrt(repetitions)  # TODO remove this part, with sharpness is enough
-#     print(f"Delete me after {eff_points=}")
-#     # 2. Generate the single, wider kernel
-#     kernel = conv_vector(eff_points, 'g', sharpness)
-#     print(f"Delete me after {kernel=}")
-#     # 3. Padding logic (remains the same to prevent edge diving)
-#     pad_len = len(kernel)
-#     print(f"Delete me after {pad_len=}")
-#     padded_resp = np.pad(resp, pad_len, mode='edge')
-#     print(f"Delete me after {padded_resp=}")
-#     # 4. Single Convolution pass
-#     result = fftconvolve(padded_resp, kernel, mode='same')
-#     print(f"Delete me after {result=}")
-#     # 5. Slice and return
-#     return result[pad_len:-pad_len]
 
-
-# @timing
-# def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) -> np.ndarray:
-#     arr = arr * 0.0  # Makes everything 0.0
-#     arr[point] = value  # Makes the point the only peak
-#     return arr
-
-# @timing
-# def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) -> np.ndarray:
-#     """Resets the array to zero and sets specific indices to a value in-place."""
-#     # .fill(0) is the fastest way to wipe an existing array in-place
-#     arr.fill(0.0)
-#     # Assign the value (works for both a single int or an array of indices)
-#     arr[point] = value
-#     return arr
 
 def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) -> np.ndarray:
     """Returns a new array of zeros with specific indices set to a value."""
@@ -935,16 +1084,14 @@ def correct_bound(value):
 @njit
 def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
     """Transforms an exponential decay curve to a linear curve.
-    The exponential form has to be: I(t) = i0 + pk0 * exp(-t / t0)
-    The linear form is: Ln(I(t) - i0) = Ln(pk0) - t/t0"""
+    The exponential form has to be: I(t) = pk0 * exp(-t / t0)
+    The linear form is: Ln(I(t)) = Ln(pk0) - t/t0"""
     if len(arr):
         match direction:
             case 1:  # positive going
-                i_0 = np.min(arr)
-                y = arr - i_0
+                y = arr
             case -1:  # negative going
-                i_0 = np.max(arr)
-                y = -(arr - i_0)
+                y = -arr
             case _:
                 raise ValueError("Wrong direction")
         return np.log(y + 1.0)
@@ -1006,7 +1153,7 @@ def exp_fit(response, time, direction):
     inv_t0, lin_pk0, r_value, p_value, std_err, intercept_stderr = lin_fit(lin_resp, time)
     fit_pk0 = np.exp(lin_pk0) * direction
     fit_t0 = 1.0 / inv_t0
-    fit_i_0 = np.average(response - fit_pk0 * np.exp(time / fit_t0))
+    fit_i_0 = 0  # Maintained just for compatibility
     return fit_i_0, fit_pk0, fit_t0, r_value  # i0, pk0, t0, r
 
 

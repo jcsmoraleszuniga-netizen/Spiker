@@ -1,14 +1,13 @@
 #!/usr/bin/env python
-import gc
-
-# import matplotlib.pyplot as plt
-import numpy as np
-import lib_gui as gui
-from lib_event_detection import EvtPro, make_instances, plot_rec
-from lib_utility import (
-    average_by, event_fr, event_aft, get_names, make_sections, make_name, auto_save, save_dict, save_plot,
-    )
+import copy
 from typing import Any
+import numpy as np
+from lib_event_detection import EvtPro, make_instances, plot_rec, plot_smooth, setup_workspace, teardown_workspace, \
+    test_main
+from lib_gui import ConstDialog
+from lib_utility import (
+    auto_save, average_by, event_fr, make_name, make_sections, save_dict, save_plot
+    )
 
 const_file = ""
 # Variables for every recording
@@ -21,11 +20,10 @@ const: dict[str, Any] = dict(
         n_deviations_peak=3.0,  # threshold deviations for peaks
         n_deviations_slope=3.0,  # threshold deviations for derivative peaks
 
-        search_width_peak=0.003,  # seconds, range to look for the maximum amplitude position +- search_width_peak/2
-        kernel_length_peak=0.004,  # Used for peak detection
+        # search_width_peak=0.003,  # seconds, range to look for the maximum amplitude position +- search_width_peak/2
+        # kernel_length_peak=0.004,  # Used for peak detection
         slope_peak_time=0.0075,  # How far the slope and peak must be to be detected. For fast events
-        zero_pass_frame=0.1,  # How far the start and peak must be to be detected. For fast events
-        peak_to_peak=0.002,  # Interval between two consecutive peaks
+        peak_to_peak=0.002,  # Minimal Interval between two consecutive peaks
         shift_time=0.001,  # seconds to find a pulse's artifact
         zero_peak_to_amp_peak=0.005,  # seconds between the amplitude peak and the derivative calculated peak
         max_rise_time=0.00263,  # max time delta allowed for the events
@@ -86,44 +84,56 @@ const: dict[str, Any] = dict(
         pp2_artifact=0.002,  # Artifact delta. The time that the stimulation artifact lasts
         search_resp=0.01,  # max interval to search the response. search_resp < pp1_r2 - pp1_r1
         burst_analysis=False,  # Activate burst_analysis?
-        kernel_length=0.5,  # Length in seconds
+        kernel_length=1.0,  # Length in seconds
+        min_num_ap=2,  # Minimum number of APs to consider an event a real burst
         corr_start=300,  # correlation template start
         corr_end=600,  # correlation template end
+        reduce=True,
+        background=False,  # Is there a background to subtract? can be a value or an array.
         )
 
 
-def run_test_block(ori_inst, const, start, end):
+def run_test_block(ori_inst, run_const, start, end):
     print("Running analysis block...")
-    temp_rec, temp_rec_smooth, temp_der = make_instances(ori_inst, const["direction"], start, end, 3)
-    temp_rec_smooth.get_smooth(
-            const["smoothed_width"],
-            const["rec_sharpness"]
-            )
+    temp_rec, temp_rec_smooth, temp_der = make_instances(ori_inst, run_const["direction"], start, end, 3)
+    if run_const["smoothed_width"]:
+        temp_rec_smooth.get_smooth(
+                run_const["smoothed_width"],
+                run_const["rec_sharpness"]
+                )
+        if run_const["plot_test"]:
+            # PyQt is completely closed when this runs, so Matplotlib will have full interactivity
+            plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recording.")
+    else:
+        temp_rec_smooth = copy.copy(temp_rec)
+
     temp_rec.get_pk_noise(
-            const["noise_smooth_frame"],
-            const["n_deviations_peak"],
-            const["resp_increment"],
-            const["std_increment"],
-            const["noise_sharpness"]
+            run_const["noise_smooth_frame"],
+            run_const["n_deviations_peak"],
+            run_const["resp_increment"],
+            run_const["std_increment"],
+            run_const["noise_sharpness"]
             )
     temp_rec_smooth.get_derv()
     temp_der.resp = temp_rec_smooth.derivative
     temp_der.get_pk_noise(
-            const["noise_smooth_frame"],
-            const["n_deviations_slope"],
-            const["resp_increment"],
-            const["std_increment"],
-            const["noise_sharpness"]
+            run_const["noise_smooth_frame"],
+            run_const["n_deviations_slope"],
+            run_const["resp_increment"],
+            run_const["std_increment"],
+            run_const["noise_sharpness"]
             )
-    temp_rec.get_peaks(const["search_width_peak"], const["shift_time"], const["kernel_length_peak"])
-    temp_der.get_peaks(const["search_width_peak"], const["shift_time"], const["kernel_length_peak"])
+    temp_rec.get_peaks(run_const["shift_time"])
+    temp_der.get_peaks(run_const["shift_time"])
+    temp_der.get_z_pass()
     temp_rec.derivative = temp_der.resp
     temp_rec.der_peaks = temp_der.peaks
-    temp_der.get_z_pass(const["zero_pass_frame"])
     temp_rec.zero_pass = temp_der.zero_pass
-    if const["plot_test"]:
+    temp_rec.align_slopes_to_zero_crossings()  # Testing this one!!!
+    temp_rec.align_peaks_to_slopes()  # Prunes the false peaks
+    if run_const["plot_test"]:
         # PyQt is completely closed when this runs, so Matplotlib will have full interactivity
-        plot_rec(temp_rec, temp_der, "Testing config", (0.0, 0.0), "full", const["factor"])
+        plot_rec(temp_rec, temp_der, "Testing config", (0.0, 0.0), const["max_slope"])
     del temp_rec_smooth
     del temp_der
     return temp_rec
@@ -132,68 +142,56 @@ def run_test_block(ori_inst, const, start, end):
 def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
     start, end = section
     print(f"\n{start = } {end = }\n")
-    # # 1. Run it ONCE initially
-    # rec = run_test_block(ori_inst, const, start, end)
 
+    # ---------------------------------------------------------
+    # 1. INITIAL DETECTION LOOP
+    # ---------------------------------------------------------
     while True:
         print("Testing new parameters... (Close the Matplotlib plot to reopen the Tuner!)")
         rec = run_test_block(ori_inst, const, start, end)
         if not const["change_config"]:
             break
-        # 2. GUI Loop (OK -> Test & Reopen | Cancel -> Break & Continue)
-        # Because of @get_from_dialog, this automatically runs .exec()
-        # Returns the dictionary if "OK", or None if "Cancel"/'X'
-        updated_const = gui.ConstDialog(const, f"Tune Params ({start}s to {end}s) - Cancel to Continue")
+
+        updated_const = ConstDialog(const, f"Tune Params ({start}s to {end}s) - Cancel to Continue")
         if updated_const is not None:
             const.update(updated_const)
-            print(f"Updated parameters using 'updated_const'.")
+            save_dict(const_file, const)
+            print("Updated parameters using 'updated_const'.")
         else:
+            save_dict(const_file, const)
             print("User finished tuning. Continuing with the rest of the processing...")
             break
 
-    # 1. Save the tuned dictionary from RAM to your hard drive
-    save_dict(const_file, const)
+    # ---------------------------------------------------------
+    # 2. EVENT EXTRACTION & MEASUREMENT
+    # ---------------------------------------------------------
     # Select those events that have a faster rise than decay
-    rec.get_evt(
-            const["slope_peak_time"], const["max_slope"], const["peak_to_peak"], const["t_bef"], const["t_aft"],
-            const["zero_peak_to_amp_peak"], const["baseline_time"], const["max_rise_time"]
-            )
+    rec.get_evt(const["peak_to_peak"], const["t_aft"], const["baseline_time"])
     rec.get_alig(const["alignment"])
     min_amplitude = const["direction"] * rec.std * const["n_deviations_peak"]
     print(f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~Recommended minimum amplitude: {min_amplitude:.3f}")
+
     rec.get_amplitudes(
-            const["min_amplitude"],
             const["baseline_time"],
             const["peak_radius"],
             const["peak_type"],
             const["adjust"]
             )
+
     if const["use_fit"]:
         rec.fit_events(
-                const["gaussian_window"],
-                const["fit_beg"],
-                const["fit_end"],
-                const["pearson_r_min"],
-                const["fit_sharpness"],
-                const["fit_tau_min"],
-                const["fit_tau_max"],
-                const["normal_mse_fit_max"],
-                const["n_limit"],
-                const["min_amplitude"]
+                const["gaussian_window"], const["fit_beg"], const["fit_end"],
+                const["pearson_r_min"], const["fit_sharpness"], const["fit_tau_min"],
+                const["fit_tau_max"], const["normal_mse_fit_max"], const["n_limit"],
                 )
+
     rec.get_extended()  # Extension of the events to use a common time interval
+
     if const["event_type"] == "AP":
         rec.get_threshold()
-    rec.get_auc(const["adjust"], const["min_auc"])
-    if const["use_psnsfa"]:
-        rec.ps_nsfa(
-                const["psnsfa_fit_start"],
-                const["psnsfa_fit_end"],
-                const["psnsfa_n_limit"],
-                const["peak_radius"],
-                )
-        axis_tuple = ((const["psnsfa_x0"], const["psnsfa_x1"]), (const["psnsfa_y0"], const["psnsfa_y1"]))
-        rec.plot_ps_nsfa(axis_tuple)
+
+    rec.get_auc(const["adjust"])
+    rec.get_half_width()
 
     if const["evoked"]:
         rec.identify_evoked(
@@ -201,21 +199,215 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
                 const["pp2_r1"], const["pp2_r2"], const["pp2_artifact"],
                 const["search_resp"],
                 )
+
+    # ---------------------------------------------------------
+    # 3. SCREEN EVENTS TUNING LOOP (OPTIMIZED FIX)
+    # ---------------------------------------------------------
+    # Back up the raw, pristine dictionaries before screening begins.
+    # This avoids deepcopying the whole class, dodging the BufferedReader error!
+    initial_events_attrs = copy.deepcopy(rec.events_attrs)
+    initial_rejected_counts = copy.deepcopy(getattr(rec, 'rejected_counts', {}))
+
+    while True:
+        print("Testing screen_events parameters... (Close the plot to reopen the Tuner!)")
+        # print(
+        #         f"\n--- CURRENT CONST VALUES --- \n"
+        #         f"max_slope:             {const['max_slope']}\n"
+        #         f"zero_peak_to_amp_peak: {const['zero_peak_to_amp_peak']}\n"
+        #         f"max_rise_time:         {const['max_rise_time']}\n"
+        #         f"slope_peak_time:       {const['slope_peak_time']}\n"
+        #         f"min_auc:               {const['min_auc']}\n"
+        #         f"pearson_r_min:         {const['pearson_r_min']}\n"
+        #         f"min_amplitude:         {const['min_amplitude']}\n"
+        #         f"----------------------------\n"
+        #         )
+        # 2. Run the screening destructively on the restored dictionaries
+        rec.screen_events(
+                const["max_slope"],
+                const["zero_peak_to_amp_peak"],
+                const["max_rise_time"],
+                const["slope_peak_time"],
+                const["min_auc"],
+                const["pearson_r_min"],
+                const["min_amplitude"]
+                )
+
+        # 3. Visualize the remaining events
+        if const["plot_test"]:
+            rec.inspect_fits(9, False, True)
+            rec.show_events_aligned(f"Testing screen_events: ")
+
+        # 4. Check if we should stop
+        if not const["change_config"]:
+            break
+
+        # 5. Open the Tuner for the screening parameters
+        updated_const = ConstDialog(const, f"Tune screen_events ({start}s to {end}s) - Cancel to Apply")
+
+        if updated_const is not None:
+            const.update(updated_const)
+            save_dict(const_file, const)
+            print("Updated screen_events parameters.")
+        else:
+            save_dict(const_file, const)
+            print("User finished tuning screen_events. Applying to recording...")
+            # Because we ran screen_events directly on 'rec', we just break and proceed.
+            break
+
+        # 1. Restore the events to their pristine state at the start of every loop
+        rec.events_attrs = copy.deepcopy(initial_events_attrs)
+        rec.rejected_counts = copy.deepcopy(initial_rejected_counts)
+
+    # ---------------------------------------------------------
+    # 4. FINAL POST-PROCESSING
+    # ---------------------------------------------------------
+    if const["use_psnsfa"]:
+        rec.ps_nsfa(
+                const["psnsfa_fit_start"], const["psnsfa_fit_end"],
+                const["psnsfa_n_limit"], const["peak_radius"],
+                )
+        axis_tuple = ((const["psnsfa_x0"], const["psnsfa_x1"]), (const["psnsfa_y0"], const["psnsfa_y1"]))
+        rec.plot_ps_nsfa(axis_tuple)
     rec.get_frequencies()
     rec.get_intervals()
-    rec.get_half_width()
+
     if const["burst_analysis"]:
-        rec.burst(const["kernel_length"])
-    # rec.get_correlation(const["corr_start"], const["corr_end"])
+        rec.burst(const["kernel_length"], const["min_num_ap"])
+        # rec.get_correlation(const["corr_start"], const["corr_end"])
 
     if const["show_everything"]:
-        title = f"From {start:0>4} to {end:0>4}. Detected {const["event_type"]}: "
+        title = f"From {start:0>4} to {end:0>4}. Detected {const['event_type']}: "
         rec.show_all_events(title, True, const["adjust"])
         rec.show_events_aligned(title)
+
     return rec
 
 
-def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: float = 600) -> None:
+def build_analysis_dicts(build_const: dict) -> tuple[dict, dict, dict, dict, dict]:
+    """Generates fresh analysis dictionaries for a new sweep."""
+    zero_arr = np.array([[0, 0]])
+
+    def _create_event_dict():
+        """Helper to generate a fresh event dictionary with independent zero_arrs."""
+
+        d = {
+                "Amplitude"           : {
+                        "value"   : zero_arr.copy(), "parameter": "amplitude", "units": build_const["units"],
+                        "function": average_by
+                        },
+                "AUC"                 : {
+                        "value"   : zero_arr.copy(), "parameter": "r_auc", "units": build_const["units"] + "*s",
+                        "function": average_by
+                        },
+                "Average Frequency"   : {
+                        "value": zero_arr.copy(), "parameter": "r_auc", "units": "Hz", "function": event_fr
+                        },
+                "Rise-slope value"    : {
+                        "value"   : zero_arr.copy(), "parameter": "rise_slope_val",
+                        "units"   : build_const["units"] + "/s",
+                        "function": average_by
+                        },
+                "Event baseline value": {
+                        "value"   : zero_arr.copy(), "parameter": "b_amp", "units": build_const["units"],
+                        "function": average_by
+                        },
+                }
+        if build_const["event_type"] in ["AP", "EPSP", "EPSC", "IPSP", "IPSC"]:
+            d.update(
+                    {
+                            "Instant Frequency": {
+                                    "value"   : zero_arr.copy(), "parameter": "r_ifreq", "units": "Hz",
+                                    "function": average_by
+                                    },
+                            }
+                    )
+        if build_const["use_fit"]:
+            d.update(
+                    {
+                            "Tau of Fit": {
+                                    "value": zero_arr.copy(), "parameter": "tau", "units": "s", "function": average_by
+                                    },
+                            "R of decay": {
+                                    "value"   : zero_arr.copy(), "parameter": "r_decay", "units": "",
+                                    "function": average_by
+                                    },
+                            "MSE fit"   : {
+                                    "value"   : zero_arr.copy(), "parameter": "mse_fit", "units": build_const["units"],
+                                    "function": average_by
+                                    },
+                            }
+                    )
+        if build_const["event_type"] == "AP":
+            d.update(
+                    {
+                            "AP threshold": {
+                                    "value"   : zero_arr.copy(), "parameter": "ap_threshold", "units": "mV",
+                                    "function": average_by
+                                    },
+                            }
+                    )
+        return d
+
+    # 1. Standard events
+    events_analyses = _create_event_dict()
+
+    # 2. Burst and Isolated Events (Only initialize if burst analysis is active)
+    burst_evt_analyses = _create_event_dict() if build_const["burst_analysis"] else {}
+    isolated_evt_analyses = _create_event_dict() if build_const["burst_analysis"] else {}
+
+    # 3. Burst block
+    # zero_arr = np.array([[0, 0]])
+    bursts_analyses = {}
+    if build_const["burst_analysis"]:
+        bursts_analyses = {
+                "Intra Inst. Freq."    : {
+                        "value": zero_arr.copy(), "parameter": "burst_avg_ifreq", "units": "Hz", "function": average_by
+                        },
+                "Intra Max Freq."      : {
+                        "value": zero_arr.copy(), "parameter": "burst_max_ifreq", "units": "Hz", "function": average_by
+                        },
+                "Intra Mean Freq."     : {
+                        "value": zero_arr.copy(), "parameter": "burst_mean_freq", "units": "Hz", "function": average_by
+                        },
+                "Freq*Count"           : {
+                        "value": zero_arr.copy(), "parameter": "burst_freq_power", "units": "Hz", "function": average_by
+                        },
+                "Length"               : {
+                        "value": zero_arr.copy(), "parameter": "burst_length", "units": "s", "function": average_by
+                        },
+                "Inter Frequency"      : {
+                        "value": zero_arr.copy(), "parameter": "burst_length", "units": "Hz", "function": event_fr
+                        },
+                "Depolarization"       : {
+                        "value"   : zero_arr.copy(), "parameter": "burst_depolarization", "units": build_const["units"],
+                        "function": average_by
+                        },
+                "Frequency integration": {
+                        "value"   : zero_arr.copy(), "parameter": "burst_freq_integration", "units": "Hz*s",
+                        "function": average_by
+                        },
+                }
+
+    # 4. Section block
+    section_analyses = {}
+    if build_const["use_psnsfa"]:
+        section_analyses = {
+                "Intercept"       : {
+                        "value"   : zero_arr.copy(), "parameter": "intercept", "units": build_const["units"] + "²",
+                        "function": None
+                        },
+                "Unitary current" : {
+                        "value": zero_arr.copy(), "parameter": "i", "units": build_const["units"], "function": None
+                        },
+                "Channel count"   : {"value": zero_arr.copy(), "parameter": "N", "units": "", "function": None},
+                "Open probability": {"value": zero_arr.copy(), "parameter": "p_0", "units": "", "function": None},
+                }
+
+    # Notice the updated return signature
+    return events_analyses, burst_evt_analyses, isolated_evt_analyses, bursts_analyses, section_analyses
+
+
+def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600) -> None:
     """
     Main analysis function.
 
@@ -225,220 +417,50 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
         total: Total time of the analysis.
         interval: Interval for sectioning the data.
     """
-    # Names and routes of the files
-    file_name, file_number, file_parent, script_name = get_names(ori_inst, __file__)
-    common_name: list = [file_name, script_name]
+    # ---------------------------------------------------------
+    # STANDARDIZED SETUP BLOCK
+    # ---------------------------------------------------------
     global const_file
-    const_file = file_parent + make_name(common_name + ["const"], ".json")
-    const.update(gui.manage_settings(const_file, const))
+    # Call the general setup. It returns the file_parent, common_name, and the const_file path
+    file_parent, common_name, const_file = setup_workspace(ori_inst, __file__, const)
+
+    # ---------------------------------------------------------
+    # SCRIPT-SPECIFIC LOGIC
+    # ---------------------------------------------------------
     common_name += [const["event_type"], const["alignment"]]
+
     # "t_bef" must be at least the size of "zero_pass_frame"
     if const["zero_pass_frame"] > const["t_bef"]:
-        print(f"Changing {const["t_bef"] = }, because is smaller than {const["zero_pass_frame"] = }")
+        print(f"Changing {const['t_bef'] = }, because is smaller than {const['zero_pass_frame'] = }")
         const["t_bef"] = const["zero_pass_frame"]
     else:
-        print(f"{const["t_bef"] = } is at least the size of {const["zero_pass_frame"] = }")
+        print(f"{const['t_bef'] = } is at least the size of {const['zero_pass_frame'] = }")
 
     if ori_inst.mode == "sweeps":
         sweep_count = ori_inst.sweeps
+        if const["background"]:
+            sweep_count = sweep_count[:-1]
     else:
         sweep_count = [1]
-    # for sweep_number, _ in enumerate(ori_inst.sweeps):
-    zero_arr = np.array([[0, 0]])
+
     for sweep_number, _ in enumerate(sweep_count):
-        # zero_arr = np.array([[0, 0]])
-        # For single events
-        events_analyses = {  # TODO load this dict from a json file
-                "Amplitude"                    : {
-                        "value"    : zero_arr,
-                        "parameter": "amplitude",
-                        "units"    : const["units"],
-                        "function" : average_by
-                        },
-                "AUC"                          : {
-                        "value"    : zero_arr,
-                        "parameter": "r_auc",
-                        "units"    : const["units"] + "*s",
-                        "function" : average_by
-                        },
-                "Average Frequency"            : {
-                        "value"    : zero_arr,
-                        "parameter": "r_auc",
-                        "units"    : "Hz",
-                        "function" : event_fr
-                        },
-                "Rise-slope value"             : {
-                        "value"    : zero_arr,
-                        "parameter": "rise_slope_val",
-                        "units"    : const["units"] + "/s",
-                        "function" : average_by
-                        },
-                "Max slope to peak"            : {
-                        "value"    : zero_arr,
-                        "parameter": "slope_peak_delta",
-                        "units"    : "s",
-                        "function" : average_by
-                        },
-                "Event baseline value"         : {
-                        "value"    : zero_arr,
-                        "parameter": "b_amp",
-                        "units"    : const["units"],
-                        "function" : average_by
-                        },
-                "Peak position error"          : {
-                        "value"    : zero_arr,
-                        "parameter": "peak_error",
-                        "units"    : "s",
-                        "function" : average_by
-                        },
-                "Rise time to peak: amplitude" : {
-                        "value"    : zero_arr,
-                        "parameter": "rise_time_peak",
-                        "units"    : "s",
-                        "function" : average_by
-                        },
-                "Rise time to peak: derivative": {
-                        "value"    : zero_arr,
-                        "parameter": "rise_time_der",
-                        "units"    : "s",
-                        "function" : average_by
-                        },
-                "Real end time"                : {
-                        "value"    : zero_arr,
-                        "parameter": "end_time",
-                        "units"    : "s",
-                        "function" : average_by
-                        },
-                }
-        # Analysis for fast or high frequency events
-        if const["event_type"] in ["AP", "EPSP", "EPSC", "IPSP", "IPSC"]:
-            fast_events_dict = {  # TODO load this dict from a json file
-                    "Instant Frequency": {
-                            "value"    : zero_arr,
-                            "parameter": "r_ifreq",
-                            "units"    : "Hz",
-                            "function" : average_by
-                            },
-                    "I_count/I_average": {
-                            "value"    : zero_arr,
-                            "parameter": "r_auc",
-                            "units"    : "",
-                            "function" : event_aft
-                            },
-                    }
-            events_analyses.update(fast_events_dict)
-        if const["use_fit"]:
-            fit_dict = {
-                    "Tau of Fit": {
-                            "value"    : zero_arr,
-                            "parameter": "tau",
-                            "units"    : "s",
-                            "function" : average_by
-                            },
-                    "R of decay": {
-                            "value"    : zero_arr,
-                            "parameter": "r_decay",
-                            "units"    : "",
-                            "function" : average_by
-                            },
-                    "MSE fit"   : {
-                            "value"    : zero_arr,
-                            "parameter": "mse_fit",
-                            "units"    : const["units"],
-                            "function" : average_by
-                            },
-                    }
-            events_analyses.update(fit_dict)
-        if const["event_type"] == "AP":
-            threshold_dict = {
-                    "AP threshold": {
-                            "value"    : zero_arr,
-                            "parameter": "ap_threshold",
-                            "units"    : "mV",
-                            "function" : average_by
-                            },
-                    }
-            events_analyses.update(threshold_dict)
-        if const["burst_analysis"]:
-            bursts_analyses = {  # TODO load this dict from a json file
-                    "Burst Intra Inst. Freq."  : {
-                            "value"    : zero_arr,
-                            "parameter": "avg_freq",
-                            "units"    : "Hz",
-                            "function" : average_by
-                            },
-                    "Burst Freq*Count": {
-                            "value"    : zero_arr,
-                            "parameter": "burst_freq_power",
-                            "units"    : "Hz",
-                            "function" : average_by
-                            },
-                    "Burst Length"       : {
-                            "value"    : zero_arr,
-                            "parameter": "burst_length",
-                            "units"    : "s",
-                            "function" : average_by
-                            },
-                    "Burst Inter Frequency": {
-                            "value"    : zero_arr,
-                            "parameter": "burst_length",
-                            "units"    : "Hz",
-                            "function" : event_fr
-                            },
-                    "Burst depolarization": {
-                            "value"    : zero_arr,
-                            "parameter": "burst_depolarization",
-                            "units"    : const["units"],
-                            "function" : average_by
-                            },
-                    "Burst frequency integration": {
-                            "value"    : zero_arr,
-                            "parameter": "burst_freq_integration",
-                            "units"    : "Hz*s",
-                            "function" : average_by
-                            },
-                    }
-        section_analyses = {}
-        if const["use_psnsfa"]:
-            psnsfa_dict = {
-                    "Intercept"       : {
-                            "value"    : zero_arr,
-                            "parameter": "intercept",
-                            "units"    : const["units"] + "²",
-                            "function" : None
-                            },
-                    "Unitary current" : {
-                            "value"    : zero_arr,
-                            "parameter": "i",
-                            "units"    : const["units"],
-                            "function" : None
-                            },
-                    "Channel count"   : {
-                            "value"    : zero_arr,
-                            "parameter": "N",
-                            "units"    : "",
-                            "function" : None
-                            },
-                    "Open probability": {
-                            "value"    : zero_arr,
-                            "parameter": "p_0",
-                            "units"    : "",
-                            "function" : None
-                            },
-                    }
-            section_analyses.update(psnsfa_dict)
+        evts_analyses, burst_evt_analyses, isol_evt_analyses, bursts_analyses, section_analyses = build_analysis_dicts(
+                const
+                )
+
         for section in make_sections(start, total, interval):
             start_s, end_s = section
             if ori_inst.mode == "sweeps":
                 ori_inst.set_resp(sweep_number)
             print(f"{section = }")
+
             # body function perform the analysis
             rec = body(ori_inst, section)  # assess the use of the '+' operator
             times_of_peaks: np.ndarray = rec.get_arr("t_o_p")
-            times_of_bursts: np.ndarray = rec.get_arr("start_time", "burst")
+            times_of_bursts: np.ndarray = rec.get_arr("burst_start_time", "burst")
+
             if len(rec.events_attrs) > 0:
                 print("...At least one event")
-
                 # Specific for events
                 events: np.ndarray = np.concatenate(([rec.common_time], rec.get_arr("r_segm")), axis=0).T
                 events_name = common_name + [
@@ -448,24 +470,51 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                 auto_save(events, out_name_evn)  # Events saved for every section
 
                 # Specific for events
-                for components in events_analyses.values():  # appending consecutive the values every iteration
-                    # print(f"{components["value"].shape = }  {components["value"] = }")
-                    # print(f"{len(times_of_peaks) = }  {times_of_peaks = }")
-                    # print(f"{len(rec.get_arr(components["parameter"])) = }  {rec.get_arr(components["parameter"]) = }")
+                for components in evts_analyses.values():  # appending consecutive the values every iteration
                     components["value"] = np.append(
                             components["value"],
                             np.stack((times_of_peaks, rec.get_arr(components["parameter"])), axis=0).T,
                             axis=0
                             )
                 if const["burst_analysis"]:
+
+                    # ---- NEW: Append Burst APs ----
+                    times_of_burst_evts = rec.get_arr("t_o_p", "burst_evt")
+                    if times_of_burst_evts is not None and times_of_burst_evts.size > 0:
+                        for components in burst_evt_analyses.values():
+                            components["value"] = np.append(
+                                    components["value"],
+                                    np.stack(
+                                            (times_of_burst_evts, rec.get_arr(components["parameter"], "burst_evt")),
+                                            axis=0
+                                            ).T,
+                                    axis=0
+                                    )
+
+                    # ---- NEW: Append Isolated APs ----
+                    times_of_isolated_evts = rec.get_arr("t_o_p", "isolated_evt")
+                    if times_of_isolated_evts is not None and times_of_isolated_evts.size > 0:
+                        for components in isol_evt_analyses.values():
+                            components["value"] = np.append(
+                                    components["value"],
+                                    np.stack(
+                                            (times_of_isolated_evts,
+                                             rec.get_arr(components["parameter"], "isolated_evt")), axis=0
+                                            ).T,
+                                    axis=0
+                                    )
+
                     # Specific for bursts
                     for components in bursts_analyses.values():  # appending consecutive the values every iteration
-                        # print(f"{components["value"].shape = }  {components["value"] = }")
-                        # print(f"{len(times_of_peaks) = }  {times_of_peaks = }")
-                        # print(f"{len(rec.get_arr(components["parameter"])) = }  {rec.get_arr(components["parameter"]) = }")
                         components["value"] = np.append(
                                 components["value"],
-                                np.stack((times_of_bursts, rec.get_arr(components["parameter"], "burst")), axis=0).T,
+                                np.stack(
+                                        (
+                                                times_of_bursts,
+                                                rec.get_arr(components["parameter"], "burst")
+                                                ),
+                                        axis=0
+                                        ).T,
                                 axis=0
                                 )
 
@@ -484,19 +533,25 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                             axis=0
                             )
             else:
-                print(f"No events detected!!")
+                print("No events detected!!")
+
+            # ---------------------------------------------------------
+            # STANDARDIZED TEARDOWN BLOCK
+            # ---------------------------------------------------------
+            teardown_workspace(rec)
 
         actual_plot_increment = {"start": start, "end": total, "increment": const["plot_increment"]}
+        const["bins"] = int(const["bins"])  # Making sure that "bins" is of integer type
 
         # Saving & plotting for events
-        for analysis_type, components in events_analyses.items():
+        for analysis_type, components in evts_analyses.items():
             components["value"] = components["value"][1:].T  # removing zero_arr
             save_plot(
                     components["value"],
                     {
                             "file_parent"  : file_parent, "common_name": common_name,
                             "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
-                            "analysis_type": analysis_type
+                            "analysis_type": f"{const['event_type']} - {analysis_type}"  # Labeled specifically
                             },
                     components["units"],
                     actual_plot_increment,
@@ -504,7 +559,39 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                     components["function"],
                     const["plot"]
                     )
+
         if const["burst_analysis"]:
+
+            # ---- NEW: Save/Plot Burst APs ----
+            for analysis_type, components in burst_evt_analyses.items():
+                if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
+                    components["value"] = components["value"][1:].T
+                    save_plot(
+                            components["value"],
+                            {
+                                    "file_parent"  : file_parent, "common_name": common_name,
+                                    "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
+                                    "analysis_type": f"Burst AP-{analysis_type}"  # Labeled specifically
+                                    },
+                            components["units"], actual_plot_increment, const["bins"], components["function"],
+                            const["plot"]
+                            )
+
+            # ---- NEW: Save/Plot Isolated APs ----
+            for analysis_type, components in isol_evt_analyses.items():
+                if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
+                    components["value"] = components["value"][1:].T
+                    save_plot(
+                            components["value"],
+                            {
+                                    "file_parent"  : file_parent, "common_name": common_name,
+                                    "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
+                                    "analysis_type": f"Iso AP-{analysis_type}"  # Labeled specifically
+                                    },
+                            components["units"], actual_plot_increment, const["bins"], components["function"],
+                            const["plot"]
+                            )
+
             # Saving & plotting for bursts
             for analysis_type, components in bursts_analyses.items():
                 components["value"] = components["value"][1:].T  # removing zero_arr
@@ -513,7 +600,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                         {
                                 "file_parent"  : file_parent, "common_name": common_name,
                                 "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
-                                "analysis_type": analysis_type
+                                "analysis_type": f"BURSTS-{analysis_type}"  # Labeled specifically
                                 },
                         components["units"],
                         actual_plot_increment,
@@ -539,28 +626,28 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                     const["plot"]
                     )
 
-    del rec  # RAM release
-    # Manually trigger garbage collection
-    collected = gc.collect()
-    print(f"Garbage collector collected {collected} objects.")
-    print("Memory should now be freed (though the OS might not immediately show it).")
+    # # ---------------------------------------------------------
+    # # STANDARDIZED TEARDOWN BLOCK
+    # # ---------------------------------------------------------
+    # teardown_workspace(rec)
+
+    if const["reduce"]:
+        # ---------------------------------------------------------
+        # PIPELINE CHAINING: INJECT CONST & TRIGGER DOWNSAMPLING
+        # ---------------------------------------------------------
+        print("Events analysis complete. Initiating downsampling...")
+
+        # 1. Import the reducer module
+        import cm_reducer
+
+        # 2. Inject the shared GUI-updated const values into the reducer's dictionary
+        for key in cm_reducer.const.keys():
+            if key in const:
+                cm_reducer.const[key] = const[key]
+
+        # 3. Call the reducer's main function
+        cm_reducer.main(ori_inst, start=start, total=total, interval=interval)
 
 
 if __name__ == "__main__":
-    # For testing purposes
-    from PyQt6.QtWidgets import QApplication
-    import sys
-    import os
-    from lib_utility import get_previous_folder, save_previous_folder
-
-    app = QApplication(sys.argv)
-    previous_folder = get_previous_folder()
-    if not previous_folder:
-        previous_folder = os.path.expanduser("~")
-    file_path_out, _ = gui.open_file_dialog(None, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
-    if file_path_out:
-        save_previous_folder(os.path.dirname(file_path_out))
-        original = EvtPro(file_path_out, True, location=0)
-        gui.show_plot(original, title="Select the time of the sections: ")
-        bound: int = int(original.time[-1])
-        main(original, 0, bound, bound)
+    test_main(main)
