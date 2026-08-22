@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 import copy
+import gc
 from typing import Any
+
+import matplotlib.pyplot as plt
 import numpy as np
-from lib_event_detection import EvtPro, make_instances, plot_rec, plot_smooth, setup_workspace, teardown_workspace, \
+from lib_event_detection import EvtPro, make_instances, plot_rec, plot_smooth, setup_workspace, \
+    teardown_workspace, \
     test_main
 from lib_gui import ConstDialog
 from lib_utility import (
-    auto_save, average_by, event_fr, make_name, make_sections, save_dict, save_plot
+    auto_save, average_by, event_fr, make_name, make_sections, save_dict, save_plot,
     )
 
 const_file = ""
@@ -95,47 +99,235 @@ const: dict[str, Any] = dict(
 
 def run_test_block(ori_inst, run_const, start, end):
     print("Running analysis block...")
-    temp_rec, temp_rec_smooth, temp_der = make_instances(ori_inst, run_const["direction"], start, end, 3)
+    temp_rec, temp_smooth, temp_der, temp_sder = make_instances(ori_inst, run_const["direction"], start, end, 4)
     if run_const["smoothed_width"]:
-        temp_rec_smooth.get_smooth(
+        temp_smooth.get_smooth(
                 run_const["smoothed_width"],
                 run_const["rec_sharpness"]
                 )
         if run_const["plot_test"]:
             # PyQt is completely closed when this runs, so Matplotlib will have full interactivity
-            plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recording.")
+            plot_smooth(temp_rec, temp_smooth, title="Original versus smoothed recording.")
     else:
-        temp_rec_smooth = copy.copy(temp_rec)
+        temp_smooth = copy.copy(temp_rec)
 
-    temp_rec.get_pk_noise(
-            run_const["noise_smooth_frame"],
-            run_const["n_deviations_peak"],
-            run_const["resp_increment"],
-            run_const["std_increment"],
-            run_const["noise_sharpness"]
+    temp_smooth.get_derv()
+    temp_sder.resp = temp_smooth.derivative
+    temp_rec.get_derv()
+    temp_der.resp = temp_rec.derivative
+
+    # Testing, delete me after
+    # Testing, delete me after
+
+    title = "Adaptive Threshold Analysis"
+    # ---------------------------------------------------------
+    # FIGURE & AXES SETUP
+    # ---------------------------------------------------------
+    # Create 2x2 subplots sharing the X-axis for synchronized zooming/panning
+    fig, axs = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
+    ax1, ax2 = axs[0, 0], axs[0, 1]
+    ax3, ax4 = axs[1, 0], axs[1, 1]
+
+    if title:
+        fig.suptitle(title, fontsize=14)
+
+    # Format all axes with a zero-line baseline
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.axhline(y=0.0, color='k', linestyle='dashed', linewidth=1, alpha=0.5)
+
+    # ---------------------------------------------------------
+    # ROW 1, COLUMN 1: Response
+    # ---------------------------------------------------------
+    ax1.plot(temp_rec.time, temp_rec.resp, 'r', label="temp_rec.resp", alpha=0.5, linewidth=2)
+    ax1.plot(temp_smooth.time, temp_smooth.resp, 'k', label="temp_smooth.resp", linewidth=2)
+    # ---------------------------------------------------------
+    # ROW 1, COLUMN 2: Derivative
+    # ---------------------------------------------------------
+    ax2.plot(temp_rec.time, temp_rec.derivative, 'r', label="temp_rec.derivative", alpha=0.5, linewidth=2)
+    ax2.plot(temp_sder.time, temp_sder.resp, 'k', label="temp_sder.resp", linewidth=2)
+    end = 0.05
+    frame_increments = np.linspace(run_const["noise_smooth_frame"], end, 2)
+    alpha_var_smooth = 1.0
+    alpha_var_raw = 0.5
+    decrement_smooth = alpha_var_smooth / len(frame_increments)
+    decrement_raw = alpha_var_raw / len(frame_increments)
+    diff_sresp_g_conv_sresp_array = []
+    diff_sderv_g_conv_sderv_array = []
+    for noise_smooth_frame in frame_increments:
+        smooth_kr_sd = temp_smooth.get_pk_noise(
+                noise_smooth_frame,
+                run_const["n_deviations_peak"],
+                run_const["resp_increment"],
+                run_const["std_increment"],
+                run_const["noise_sharpness"]
+                )
+        sder_kr_sd = temp_sder.get_pk_noise(
+                noise_smooth_frame,
+                run_const["n_deviations_slope"],
+                run_const["resp_increment"],
+                run_const["std_increment"],
+                run_const["noise_sharpness"]
+                )
+        rec_kr_sd = temp_rec.get_pk_noise(
+                noise_smooth_frame,
+                run_const["n_deviations_peak"],
+                run_const["resp_increment"],
+                run_const["std_increment"],
+                run_const["noise_sharpness"]
+                )
+        der_kr_sd = temp_der.get_pk_noise(
+                noise_smooth_frame,
+                run_const["n_deviations_slope"],
+                run_const["resp_increment"],
+                run_const["std_increment"],
+                run_const["noise_sharpness"]
+                )
+        print(f'{noise_smooth_frame=} {run_const["noise_sharpness"]=}')
+        # ---------------------------------------------------------
+        # PRE-CALCULATE DIFFERENCES
+        # ---------------------------------------------------------
+        print(
+            f"{smooth_kr_sd=} "
+            f"\n{sder_kr_sd=} "
+            f"\n{rec_kr_sd=} "
+            f"\n{der_kr_sd=}"
             )
-    temp_rec_smooth.get_derv()
-    temp_der.resp = temp_rec_smooth.derivative
-    temp_der.get_pk_noise(
-            run_const["noise_smooth_frame"],
-            run_const["n_deviations_slope"],
-            run_const["resp_increment"],
-            run_const["std_increment"],
-            run_const["noise_sharpness"]
+        diff_resp_g_conv_resp = temp_rec.resp - temp_rec.adaptive_sresp
+        diff_sresp_g_conv_sresp = temp_smooth.resp - temp_smooth.adaptive_sresp
+        diff_sresp_g_conv_sresp_array.append(diff_sresp_g_conv_sresp)  # accumulator for sresp
+        diff_derv_g_conv_derv = temp_der.resp - temp_der.adaptive_sresp
+        diff_sderv_g_conv_sderv = temp_sder.resp - temp_sder.adaptive_sresp
+        diff_sderv_g_conv_sderv_array.append(diff_sderv_g_conv_sderv)  # accumulator for sderv
+        # ---------------------------------------------------------
+        # ROW 1, COLUMN 1: Response
+        # ---------------------------------------------------------
+        ax1.plot(
+                temp_smooth.time,
+                temp_smooth.adaptive_sresp,
+                'b', alpha=alpha_var_smooth,
+                label=f"Frame={noise_smooth_frame:3.3f} SD={smooth_kr_sd:3.5f}"
+                )
+        ax1.legend(loc="lower right")
+        ax1.set_title("Response (temp_smooth.resp)")
+        # ---------------------------------------------------------
+        # ROW 1, COLUMN 2: Derivative
+        # ---------------------------------------------------------
+        ax2.plot(
+                temp_sder.time,
+                temp_sder.adaptive_sresp,
+                'b', alpha=alpha_var_smooth,
+                label=f"Frame={noise_smooth_frame:3.3f} SD={sder_kr_sd:3.5f}"
             )
-    temp_rec.get_peaks(run_const["shift_time"])
-    temp_der.get_peaks(run_const["shift_time"])
-    temp_der.get_z_pass()
-    temp_rec.derivative = temp_der.resp
-    temp_rec.der_peaks = temp_der.peaks
-    temp_rec.zero_pass = temp_der.zero_pass
+        ax2.legend(loc="lower right")
+        ax2.set_title("Derivative (temp_sder.resp)")
+        # ---------------------------------------------------------
+        # ROW 2, COLUMN 1: Response Difference
+        # ---------------------------------------------------------
+        ax3.plot(temp_rec.time, diff_resp_g_conv_resp, 'r', alpha=alpha_var_raw)
+        ax3.plot(
+                temp_smooth.time,
+                diff_sresp_g_conv_sresp,
+                'k', alpha=alpha_var_smooth, label=f"Frame={noise_smooth_frame:3.3f} SD={smooth_kr_sd:3.5f}"
+                )
+        ax3.plot(temp_smooth.time, temp_smooth.direction * temp_smooth.interpolated_sd, 'g', alpha=alpha_var_smooth)
+        # ---------------------------------------------------------
+        # ROW 2, COLUMN 2: Derivative Difference
+        # ---------------------------------------------------------
+        ax4.plot(temp_der.time, diff_derv_g_conv_derv, 'r', alpha=alpha_var_raw)
+        ax4.plot(
+                temp_sder.time,
+                diff_sderv_g_conv_sderv,
+                'k', alpha=alpha_var_smooth, label=f"Frame={noise_smooth_frame:3.3f} SD={sder_kr_sd:3.5f}"
+                )
+        ax4.plot(temp_sder.time, temp_sder.direction * temp_sder.interpolated_sd, 'g', alpha=alpha_var_smooth)
+        ax4.legend(loc="lower right")
+        ax4.set_title("temp_sder.resp - temp_sder.adaptive_sresp")
+        ax4.set_xlabel("Time")
+
+        alpha_var_smooth -= decrement_smooth
+        alpha_var_raw -= decrement_raw
+
+
+    print(f"Testing COV... delete me after...")
+    # ---------------------------------------------------------
+    # ROW 2, COLUMN 1: Response Difference
+    # ---------------------------------------------------------
+    diff_sresp_g_conv_sresp_array = np.array(diff_sresp_g_conv_sresp_array)
+    diff_sresp_g_conv_sresp_std = np.std(diff_sresp_g_conv_sresp_array, axis=0)
+    diff_sresp_g_conv_sresp_avg = np.average(diff_sresp_g_conv_sresp_array, axis=0)
+    diff_sresp_g_conv_sresp_new = diff_sresp_g_conv_sresp_std*diff_sresp_g_conv_sresp_avg
+    ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_std, "k:", label="diff_sresp_g_conv_sresp_std")
+    ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_avg, "g:", label="diff_sresp_g_conv_sresp_avg")
+    ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_new, "b", linewidth=2, label="diff_sresp_g_conv_sresp_new")
+    ax3.legend(loc="lower right")
+    ax3.set_title("temp_smooth.resp - temp_smooth.adaptive_sresp")
+    ax3.set_xlabel("Time")
+    # ---------------------------------------------------------
+    # ROW 2, COLUMN 2: Derivative Difference
+    # ---------------------------------------------------------
+    diff_sderv_g_conv_sderv_array = np.array(diff_sderv_g_conv_sderv_array)
+    diff_sderv_g_conv_sderv_std = np.std(diff_sderv_g_conv_sderv_array, axis=0)
+    diff_sderv_g_conv_sderv_avg = np.average(diff_sderv_g_conv_sderv_array, axis=0)
+    diff_sderv_g_conv_sderv_new = diff_sderv_g_conv_sderv_std*diff_sderv_g_conv_sderv_avg
+    ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_std, "k:", label="diff_sderv_g_conv_sderv_std")
+    ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_avg, "g:", label="diff_sderv_g_conv_sderv_avg")
+    ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_new, "b", linewidth=2, label="diff_sderv_g_conv_sderv_new")
+    ax4.legend(loc="lower right")
+    ax4.set_title("temp_sder.resp - temp_sder.adaptive_sresp")
+    ax4.set_xlabel("Time")
+
+    plt.tight_layout()
+
+    # ---------------------------------------------------------
+    # MATPLOTLIB EVENT LOOP & RAM CLEARING
+    # ---------------------------------------------------------
+    plt.show(block=False)
+    fig.canvas.draw()
+
+    def on_close(event):
+        event.canvas.stop_event_loop()
+
+    cid = fig.canvas.mpl_connect('close_event', on_close)
+    fig.canvas.start_event_loop(timeout=0)
+
+    # SCORCHED EARTH RAM CLEARING
+    fig.canvas.mpl_disconnect(cid)
+    fig.clear()
+    plt.close(fig)
+    plt.close('all')
+
+    # Delete heavy local arrays and objects to force memory deallocation immediately
+    del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv
+    del fig, axs, ax1, ax2, ax3, ax4
+    gc.collect()
+
+    # Testing, delete me after
+    # Testing, delete me after
+
+    # temp_rec.peak_noise = copy.deepcopy(temp_smooth.peak_noise)
+    # temp_smooth.peak_noise = copy.deepcopy(temp_smooth.interpolated_sd ** 2)
+    # temp_smooth.resp = diff_sresp_g_conv_sresp_new  # Testing
+    temp_smooth.get_peaks(run_const["shift_time"])  # Get the peaks of the smoothed response
+    temp_rec.peaks = temp_smooth.peaks
+    temp_rec.peak_boundaries = temp_smooth.peak_boundaries
+    temp_rec.peak_noise = temp_smooth.peak_noise
+
+    # temp_der.peak_noise = copy.deepcopy(temp_der.interpolated_sd ** 2)
+    diff_sderv_g_conv_sderv = temp_sder.resp - temp_sder.adaptive_sresp
+    temp_sder.resp = np.abs(diff_sderv_g_conv_sderv) * diff_sderv_g_conv_sderv  # Derivative convolution
+    temp_sder.get_peaks(run_const["shift_time"])  # Get the peaks of the derivative convolution
+    temp_sder.get_z_pass()
+
+    temp_rec.der_peak_noise = temp_sder.peak_noise
+    temp_rec.der_peaks = temp_sder.peaks
+    temp_rec.zero_pass = temp_sder.zero_pass
     temp_rec.align_slopes_to_zero_crossings()  # Testing this one!!!
     temp_rec.align_peaks_to_slopes()  # Prunes the false peaks
     if run_const["plot_test"]:
         # PyQt is completely closed when this runs, so Matplotlib will have full interactivity
-        plot_rec(temp_rec, temp_der, "Testing config", (0.0, 0.0), const["max_slope"])
-    del temp_rec_smooth
-    del temp_der
+        plot_rec(temp_rec, "Testing config", (0.0, 0.0), const["max_slope"])
+    del temp_smooth
+    del temp_sder
     return temp_rec
 
 
@@ -210,17 +402,6 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
 
     while True:
         print("Testing screen_events parameters... (Close the plot to reopen the Tuner!)")
-        # print(
-        #         f"\n--- CURRENT CONST VALUES --- \n"
-        #         f"max_slope:             {const['max_slope']}\n"
-        #         f"zero_peak_to_amp_peak: {const['zero_peak_to_amp_peak']}\n"
-        #         f"max_rise_time:         {const['max_rise_time']}\n"
-        #         f"slope_peak_time:       {const['slope_peak_time']}\n"
-        #         f"min_auc:               {const['min_auc']}\n"
-        #         f"pearson_r_min:         {const['pearson_r_min']}\n"
-        #         f"min_amplitude:         {const['min_amplitude']}\n"
-        #         f"----------------------------\n"
-        #         )
         # 2. Run the screening destructively on the restored dictionaries
         rec.screen_events(
                 const["max_slope"],
@@ -234,7 +415,8 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
 
         # 3. Visualize the remaining events
         if const["plot_test"]:
-            rec.inspect_fits(9, False, True)
+            if const["use_fit"]:
+                rec.inspect_fits(9, False, True)
             rec.show_events_aligned(f"Testing screen_events: ")
 
         # 4. Check if we should stop
@@ -456,6 +638,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
 
             # body function perform the analysis
             rec = body(ori_inst, section)  # assess the use of the '+' operator
+            rec.common_name = common_name
             times_of_peaks: np.ndarray = rec.get_arr("t_o_p")
             times_of_bursts: np.ndarray = rec.get_arr("burst_start_time", "burst")
 

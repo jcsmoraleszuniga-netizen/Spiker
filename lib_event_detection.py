@@ -6,7 +6,7 @@ import warnings
 from itertools import pairwise, repeat
 from typing import List, Any
 from lib_gui import get_record_from_dialog, manage_settings, show_plot
-from numpy import ndarray, dtype, flipud
+from numpy import ndarray, dtype
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,7 +14,8 @@ from scipy.ndimage import find_objects, label
 from scipy.signal import fftconvolve, correlate
 
 from lib_utility import (
-    conv_vector, down_sample_function_t, exp_decay, exp_fit, find_peaks_and_boundaries, get_names, lin_fit, make_name,
+    conv_vector, down_sample_function_t, exp_decay, exp_fit, find_peaks_and_boundaries, get_names, get_real_kernel_sd,
+    lin_fit, make_name,
     parabolic_fit,
     remove_nan,
     sort_vectors_by_first, vtp, differentiate,
@@ -112,7 +113,99 @@ def _get_sparse_indices(arr):
 
 
 @timing
-def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
+def plot_adaptive_analysis(rec, smooth, der, sder, title="Adaptive Threshold Analysis"):
+    """
+    Displays a 2x2 grid of response and derivative plots alongside their
+    adaptive threshold differences. Incorporates scorched-earth memory
+    management and event loop handling for safe, non-blocking execution.
+    """
+    # ---------------------------------------------------------
+    # PRE-CALCULATE DIFFERENCES
+    # ---------------------------------------------------------
+    diff_resp_g_conv_resp = rec.resp - rec.adaptive_sresp
+    diff_sresp_g_conv_sresp = smooth.resp - smooth.adaptive_sresp
+    diff_derv_g_conv_derv = der.resp - der.adaptive_sresp
+    diff_sderv_g_conv_sderv = sder.resp - sder.adaptive_sresp
+
+    # ---------------------------------------------------------
+    # FIGURE & AXES SETUP
+    # ---------------------------------------------------------
+    # Create 2x2 subplots sharing the X-axis for synchronized zooming/panning
+    fig, axs = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
+    ax1, ax2 = axs[0, 0], axs[0, 1]
+    ax3, ax4 = axs[1, 0], axs[1, 1]
+
+    if title:
+        fig.suptitle(title, fontsize=14)
+
+    # Format all axes with a zero-line baseline
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.axhline(y=0.0, color='k', linestyle='dashed', linewidth=1, alpha=0.5)
+
+    # ---------------------------------------------------------
+    # ROW 1, COLUMN 1: Response
+    # ---------------------------------------------------------
+    ax1.plot(rec.time, rec.resp, 'r', label="rec.resp")
+    ax1.plot(smooth.time, smooth.resp, 'k', label="smooth.resp")
+    ax1.plot(smooth.time, smooth.adaptive_sresp, 'b:', label="adaptive_sresp")
+    ax1.plot(smooth.time, smooth.peak_noise, 'g:')
+    ax1.set_title("Response (smooth.resp)")
+
+    # ---------------------------------------------------------
+    # ROW 1, COLUMN 2: Derivative
+    # ---------------------------------------------------------
+    ax2.plot(rec.time, rec.derivative, 'r', label="rec.derivative")
+    ax2.plot(sder.time, sder.resp, 'k', label="sder.resp")
+    ax2.plot(sder.time, sder.adaptive_sresp, 'b:', label="sder.adaptive_sresp")
+    ax2.plot(sder.time, sder.peak_noise, 'g:')
+    ax2.set_title("Derivative (der.resp)")
+
+    # ---------------------------------------------------------
+    # ROW 2, COLUMN 1: Response Difference
+    # ---------------------------------------------------------
+    ax3.plot(rec.time, diff_resp_g_conv_resp, 'r')
+    ax3.plot(smooth.time, diff_sresp_g_conv_sresp, 'k')
+    ax3.plot(smooth.time, smooth.direction * smooth.interpolated_sd, 'g:')
+    ax3.set_title("smooth.resp - smooth.adaptive_sresp")
+    ax3.set_xlabel("Time")
+
+    # ---------------------------------------------------------
+    # ROW 2, COLUMN 2: Derivative Difference
+    # ---------------------------------------------------------
+    ax4.plot(der.time, diff_derv_g_conv_derv, 'r')
+    ax4.plot(sder.time, diff_sderv_g_conv_sderv, 'k')
+    ax4.plot(sder.time, sder.direction * sder.interpolated_sd, 'g:')
+    ax4.set_title("sder.resp - sder.adaptive_sresp")
+    ax4.set_xlabel("Time")
+
+    plt.tight_layout()
+
+    # ---------------------------------------------------------
+    # MATPLOTLIB EVENT LOOP & RAM CLEARING
+    # ---------------------------------------------------------
+    plt.show(block=False)
+    fig.canvas.draw()
+
+    def on_close(event):
+        event.canvas.stop_event_loop()
+
+    cid = fig.canvas.mpl_connect('close_event', on_close)
+    fig.canvas.start_event_loop(timeout=0)
+
+    # SCORCHED EARTH RAM CLEARING
+    fig.canvas.mpl_disconnect(cid)
+    fig.clear()
+    plt.close(fig)
+    plt.close('all')
+
+    # Delete heavy local arrays and objects to force memory deallocation immediately
+    del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv
+    del fig, axs, ax1, ax2, ax3, ax4
+    gc.collect()
+
+
+@timing
+def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     """
     Displays two vertically stacked plots sharing the X-axis.
     Plots all points in the recording without decimation, while retaining
@@ -120,7 +213,7 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     """
     # Create two subplots stacked vertically
     fig, (ax1, ax2) = plt.subplots(
-            2, 1, sharex=True, figsize=(15, 10),
+            2, 1, sharex=True, figsize=(9, 7),
             gridspec_kw={'height_ratios': [1, 1]}
             )
 
@@ -128,7 +221,7 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     # DYNAMIC SCALING & NORMALIZATION
     # ---------------------------------------------------------
     # 1. Base maximum for the derivative background
-    max_amp_der = np.max(np.abs(der.resp)) if len(der.resp) > 0 else 1.0
+    max_amp_der = np.max(np.abs(rec.derivative)) if len(rec.derivative) > 0 else 1.0
 
     # 2. Normalize rec.peaks to max absolute amplitude of 60.0
     max_abs_peak = np.max(np.abs(rec.peaks))
@@ -146,7 +239,7 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     idx_dp = np.nonzero(rec.der_peaks)[0]
     idx_zp = np.nonzero(rec.zero_pass)[0]
 
-    # NEW: Extract boundary indices from the list of tuples (peak_idx, start_idx, end_idx)
+    # Extract boundary indices from the list of tuples (peak_idx, start_idx, end_idx)
     idx_bounds = []
     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
         for _, start, end in rec.peak_boundaries:
@@ -176,7 +269,7 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
             alpha=0.6
             )
 
-    # NEW: Draw true vertical lines for the peak boundaries (start and end limits)
+    # Draw true vertical lines for the peak boundaries (start and end limits)
     if len(idx_bounds) > 0:
         # Scale boundary markers to 25% of the max scaled peak height (60.0)
         # and lock to the recording direction
@@ -188,7 +281,7 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
                 ymax=bound_height,
                 colors="k",
                 linewidth=1.0,
-                alpha=0.25,
+                alpha=0.1,
                 linestyle='--'
                 )
 
@@ -201,11 +294,11 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     # BOTTOM PLOT (DER)
     # ---------------------------------------------------------
     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
-    ax2.plot(der.time, der.resp, "b", linewidth=2.5, label="Derivative")
+    ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
 
     # Draw true vertical lines for the derivative peaks using the normalized array
     ax2.vlines(
-            x=der.time[idx_dp],
+            x=rec.time[idx_dp],
             ymin=-scaled_der_peaks[idx_dp],
             ymax=scaled_der_peaks[idx_dp],
             colors="r",
@@ -219,19 +312,21 @@ def plot_rec(rec, der, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     # Draw true vertical lines for the zero-pass markers
     ax2.vlines(
             x=rec.time[idx_zp],
-            ymin=0,
+            ymin=-zp_heights[idx_zp],
             ymax=zp_heights[idx_zp],
             colors="k",
             linewidth=1.0,
-            alpha=0.25,
+            alpha=0.1,
             linestyle='--'
             )
 
-    # Plot ALL points of the noise trace without decimation
-    ax2.plot(der.time, der.peak_noise, "b:", alpha=0.4)
-    ax2.set_ylabel("Derivative (der)")
+    # Plot ALL points of the noise trace without decimation (NOTE: verify attribute name here)
+    ax2.plot(rec.time, rec.der_peak_noise, "b:", alpha=0.4)
+    ax2.set_ylabel("Derivative (rec.derivative)")
     ax2.set_xlabel("Time")
-
+    #     ax2.plot(der.time, der.peak_noise, "b:", alpha=0.4)
+    #     ax2.set_ylabel("Derivative (der)")
+    #     ax2.set_xlabel("Time")
     plt.tight_layout()
 
     # --- Matplotlib Event Loop & RAM Clearing ---
@@ -259,7 +354,7 @@ def plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recor
     Implements strict memory management and local event loops to prevent RAM leaks.
     """
     # Create figure using the object-oriented approach
-    fig, ax = plt.subplots(figsize=(15, 7.5))
+    fig, ax = plt.subplots(figsize=(9, 7))
 
     ax.axhline(y=0.0, color="k", linestyle='--')
 
@@ -398,7 +493,7 @@ class loadRecord(base):
 
     def __init__(self, path_to_file, initialize=True, location=0):
         super().__init__()
-        self.sweep_index = None
+        self.sweep_index = 0
         loadRecord.instance_number += 1
         self._instance_number = loadRecord.instance_number
         self._path_to_file = path_to_file
@@ -415,7 +510,6 @@ class loadRecord(base):
 
         self.__dict__.update(self.data_object.__dict__)
         del self.data_object
-        # print(f"{self.__dict__ = }")
 
     @timing
     def __copy__(self):
@@ -681,7 +775,10 @@ class Analyzer(Fourier):
         super().__init__(path_to_file, initialize, location)
         self.pul_attrs = {}  # Initialization
         self.pulses_peaks = np.array([])
+        self.interpolated_sd = np.array([])  # Initialization
+        self.adaptive_sresp = np.array([])  # Initialization
         self.peak_noise = np.array([])  # Initialization
+        self.der_peak_noise = np.array([])  # Initialization
         self.std = 0.0  # Initialization
         self.derivative = np.array([])  # Initialization
         self.der_peaks = np.array([])  # Initialization
@@ -707,7 +804,8 @@ class Analyzer(Fourier):
     @timing
     def get_smooth(self, smooth_width=0.001, sharpness=4):
         n_p = vtp(smooth_width, self.t_delta)
-        self.resp = smoothing(self.resp, n_p, sharpness)
+        self.resp, kernel_sd = smoothing(self.resp, n_p, sharpness, 'g', 1 / self.t_delta)
+        return kernel_sd
 
     @timing
     def get_section_area(self, baseline_start=371, baseline_end=376, response_end=441, linear_fit=False):
@@ -719,9 +817,13 @@ class Analyzer(Fourier):
 
         shift = np.nanmean(self.resp[b_s_p:b_e_p])
 
-        resp = smoothing(copy.deepcopy(self.resp[b_e_p:r_e_p]) - shift, points, 2)
+        resp, kernel_sd = smoothing(
+                copy.deepcopy(self.resp[b_e_p:r_e_p]) - shift, points, 2, 'g', 1 / self.t_delta
+                )
         r_time = copy.deepcopy(self.time[b_e_p:r_e_p])
-        base = smoothing(copy.deepcopy(self.resp[b_s_p:b_e_p]) - shift, points, 2)
+        base, kernel_sd = smoothing(
+                copy.deepcopy(self.resp[b_s_p:b_e_p]) - shift, points, 2, 'g', 1 / self.t_delta
+                )
         b_time = copy.deepcopy(self.time[b_s_p:b_e_p])
 
         if linear_fit:
@@ -785,7 +887,7 @@ class Analyzer(Fourier):
     @timing
     def get_pk_noise(self, time_frame=0.2, n_deviations=3, resp_increment=0.5, std_increment=10, sharpness=2):
         n_p = vtp(time_frame, self.t_delta)
-        smoothed_resp = smoothing(self.resp, n_p, sharpness)
+        self.adaptive_sresp, kernel_sd = smoothing(self.resp, n_p, sharpness, 'g', 1 / self.t_delta)
         # 1. Use a separate variable name for the dictionary
         resp_inc_dict = {"start": self.time[0], "end": self.time[-1], "increment": resp_increment}
         std_resp = apply_by(np.std, np.array([self.time, self.resp]), resp_inc_dict, True)
@@ -793,8 +895,8 @@ class Analyzer(Fourier):
         if std_resp.size == 0 or len(std_resp[0]) == 0:
             print("Warning: std_resp is empty. Falling back to 0 noise.")
             self.std = 0.0
-            self.peak_noise = smoothed_resp
-            return
+            self.peak_noise = self.adaptive_sresp
+            return kernel_sd
 
         # 2. Calculate the ACTUAL time span dynamically
         start_time = std_resp[0][0]
@@ -820,14 +922,16 @@ class Analyzer(Fourier):
             print("Warning: apply_by returned an empty array for std_min. Using global minimum instead.")
             self.std = np.nanmean(std_resp[1])  # Fallback to the mean of the whole section
             global_min = np.nanmin(std_resp[1])
-            self.peak_noise = smoothed_resp + (global_min * n_deviations * self.direction)
+            self.peak_noise = self.adaptive_sresp + (global_min * n_deviations * self.direction)
         else:
             # Standard successful execution
             self.std = np.nanmean(std_min[1])
-            self.peak_noise = smoothed_resp + np.interp(
+            self.interpolated_sd = np.interp(
                     self.time, std_min[0],
-                    std_min[1] * n_deviations * self.direction
+                    std_min[1] * n_deviations
                     )
+            self.peak_noise = self.adaptive_sresp + self.direction * self.interpolated_sd
+        return kernel_sd
 
     @timing
     def get_derv(self):
@@ -925,52 +1029,6 @@ class Analyzer(Fourier):
         self.zero_pass[only_left] = -1
         self.zero_pass[only_right] = 1
         self.zero_pass[shared] = 2  # 2 acts as a simultaneous 'End & Start'
-
-    # @timing
-    # def get_z_pass(self, zero_pass_frame=0.005, delete_peaks=True):
-    #     spaces = vtp(zero_pass_frame, self.t_delta)
-    #     zero_pass = np.zeros(len(self.peaks))
-    #     max_length = len(self.peaks)
-    #     tmp_peaks = np.copy(self.peaks)
-    #     front = np.array([])
-    #     back = np.array([])
-    #     for evt_pos, value in enumerate(tmp_peaks):
-    #         if value:
-    #             if spaces <= evt_pos <= max_length - spaces:
-    #                 front = np.copy(self.resp[evt_pos:evt_pos + spaces])
-    #                 back = np.copy(flipud(self.resp[evt_pos - spaces:evt_pos + 1]))
-    #             elif 0 >= evt_pos - spaces:
-    #                 front = np.copy(self.resp[evt_pos:evt_pos + spaces])
-    #                 back = np.copy(flipud(self.resp[:evt_pos + 1]))
-    #             elif max_length <= evt_pos + spaces:
-    #                 front = np.copy(self.resp[evt_pos:])
-    #                 back = np.copy(flipud(self.resp[evt_pos - spaces:evt_pos + 1]))
-    #             else:
-    #                 warnings.warn("An unexpected error occurred in 'get_z_pass'.")
-    #
-    #             match self.direction:
-    #                 case -1:
-    #                     if np.max(front) < 0:
-    #                         front -= np.max(front)
-    #                     if np.max(back) < 0:
-    #                         back -= np.max(back)
-    #                 case 1:
-    #                     if np.min(front) > 0:
-    #                         front -= np.min(front)
-    #                     if np.min(back) > 0:
-    #                         back -= np.min(back)
-    #                 case _:
-    #                     print("Wrong direction at get_z_pass")
-    #             aft_zero = crossing_point(front)
-    #             bef_zero = crossing_point(back)
-    #             if None in (aft_zero, bef_zero):
-    #                 if delete_peaks:
-    #                     self.peaks[evt_pos] = 0
-    #             else:
-    #                 zero_pass[evt_pos - bef_zero] = -1
-    #                 zero_pass[evt_pos + aft_zero] = 1
-    #
-    #     self.zero_pass = zero_pass
 
     @timing
     def get_rescap(
@@ -1379,12 +1437,14 @@ class EvtPro(Analyzer):
                 "amplitude"       : None,  # Absolute amplitude of the response
                 "r_ifreq"         : None,  # Instantaneous frequency of the response
                 "r_inter"         : None,  # Interval between the response and the previous response
-                # I(t) = i0 + pk0 * exp(-t / t0)
-                "fit_min"         : None,  # Fit of i0
+                # I(t) = pk0 * exp(-t / t0)
+                "fit_min"         : 0.0,  # Fit of i0
                 "fit_peak"        : None,  # Fit of pk0
                 "tau"             : None,  # Exp. decay fit constant, t0
                 "r_decay"         : None,  # Pearson's R of the fit
                 "mse_fit"         : None,  # Minimal standard error of the fit
+                "pearson_r"       : 0.01,  # Pearson's R of the fit (duplicate pointer)
+                "fit_valid"       : False,  # Validity of the fit
                 "r_auc"           : None,  # Area under the curve of the response
                 "threshold_segm"  : None,  # threshold segment
                 "ap_threshold"    : None,  # threshold value
@@ -1760,38 +1820,6 @@ class EvtPro(Analyzer):
             self.events_attrs[evt_time]["amplitude"] = amplitude
 
         print(f"Extracted amplitudes for {len(self.events_attrs)} putative events.")
-    # def get_amplitudes(
-    #         self, min_ampl: float = -1.48, baseline_time: float = 0.005,
-    #         peak_radius: float = 0.0, peak_type: str = 'p', adjust=True
-    #         ) -> None:
-    #     self._get_adj(baseline_time, adjust)
-    #     p_r_p = vtp(peak_radius, self.t_delta)
-    #     initial_event_count = len(self.events_attrs)
-    #
-    #     for evt_time in list(self.events_attrs.keys()):
-    #         r_segm = self.events_attrs[evt_time]["r_segm"]
-    #         match peak_type:
-    #             case "p":
-    #                 p_segm = self.events_attrs[evt_time]["p_segm"]
-    #                 p_t_p = np.argmax(p_segm)
-    #             case "z":
-    #                 z_segm = self.events_attrs[evt_time]["z_segm"]
-    #                 p_t_p = np.argmax(z_segm)
-    #             case _:
-    #                 raise ValueError(f"Wrong peak type ('p' or 'z')")
-    #
-    #         if peak_radius > 0.0:
-    #             amplitude = np.nanmean(r_segm[p_t_p - p_r_p: p_t_p + p_r_p + 1])
-    #         else:
-    #             amplitude = r_segm[p_t_p]
-    #
-    #         if amplitude * self.direction > min_ampl * self.direction:
-    #             self.events_attrs[evt_time]["amplitude"] = amplitude
-    #         else:
-    #             msg = f"Event at {evt_time:12.4f}[s] rejected {min_ampl=:6.2f} and {amplitude:6.2f}"
-    #             self._reject_event(evt_time, "amplitude_limit", msg)
-    #
-    #     print(f" Accepted events: {len(self.events_attrs)}, Rejected: {initial_event_count - len(self.events_attrs)}")
 
     def get_arr(self, name, element_type="evt"):
         match element_type:
@@ -1875,7 +1903,7 @@ class EvtPro(Analyzer):
             p_segm = evt_data["p_segm"]
 
             peak_pos = np.argmax(p_segm)
-            smoothed_resp = smoothing(r_segm, n_p, sharpness)
+            smoothed_resp, kernel_sd = smoothing(r_segm, n_p, sharpness, 'g', 1 / self.t_delta)
 
             abs_fit_start = peak_pos + pos_fit_start
             abs_fit_end = peak_pos + pos_fit_end
@@ -2195,85 +2223,6 @@ class EvtPro(Analyzer):
                 }
 
         print(f"ps-NSFA complete: i={unitary_current:.2f}pA, N={channel_count:.0f}, P_open={p_0:.2f}")
-    # @timing
-    # def ps_nsfa(
-    #         self, fit_start=0.001, fit_end=0.01, n_limit=1.0, peak_radius=0.0
-    #         ):
-    #     end_pos = vtp(fit_end, self.t_delta)
-    #     local_exp_fit = exp_fit  # Local assignment for fast lookup on local scope
-    #     avg_resp = np.nanmean(self.get_arr("r_segm"), axis=0)
-    #     avg_time = np.nanmean(self.get_arr("t_segm"), axis=0)  # to use common_time use get_extended first
-    #     p_r_p = vtp(peak_radius, self.t_delta)
-    #     p_t_p = np.argmin(avg_resp)
-    #     if peak_radius > 0.0:
-    #         mean_peak = np.nanmean(avg_resp[p_t_p - p_r_p: p_t_p + p_r_p + 1])
-    #     else:
-    #         mean_peak = avg_resp[p_t_p]
-    #     mean_resp_diff_pow2 = []
-    #     plt.figure(figsize=(3, 2.5))
-    #     for evt_pos in self.events_attrs:
-    #         r_segm = self.events_attrs[evt_pos]["r_segm"]
-    #         t_segm = self.events_attrs[evt_pos]["t_segm"]
-    #         amplitude = self.events_attrs[evt_pos]["amplitude"]
-    #         end_time = self.events_attrs[evt_pos]["end_time"]
-    #         if avg_time[p_t_p + end_pos] <= end_time:
-    #             plt.plot(t_segm, r_segm, "r", alpha=0.3)
-    #             plt.plot(t_segm, avg_resp * (amplitude / mean_peak), "b", alpha=0.3)
-    #             plt.plot(t_segm, r_segm - avg_resp * (amplitude / mean_peak), "b", alpha=0.1)
-    #             mean_resp_diff_pow2.append(np.power(r_segm - avg_resp * (amplitude / mean_peak), 2))
-    #     mean_resp_diff_pow2 = np.array(mean_resp_diff_pow2)
-    #     n_e = len(mean_resp_diff_pow2)
-    #     var_resp = np.sum(mean_resp_diff_pow2, axis=0) / n_e  # Variance around the scaled mean
-    #     plt.plot(avg_time, var_resp, "k")
-    #     plt.plot(avg_time, avg_resp, "k")
-    #     start_pos = vtp(fit_start, self.t_delta)
-    #     slice_section = slice(p_t_p + start_pos, p_t_p + end_pos)
-    #     time_section = avg_time[slice_section]
-    #     variance_section = var_resp[slice_section]
-    #     response_section = avg_resp[slice_section]
-    #     fit_i_0, fit_pk0, fit_t0, pearson_r = local_exp_fit(
-    #             response_section,
-    #             time_section - avg_time[p_t_p + start_pos],
-    #             self.direction
-    #             )
-    #     extra_resp_made = np.linspace(
-    #             fit_i_0 - 0.1,
-    #             np.round(
-    #                     exp_decay((time_section[0] - avg_time[p_t_p + start_pos]), fit_i_0, fit_pk0, fit_t0)
-    #                     ).astype(int),
-    #             np.round(np.abs(response_section[0])).astype(int)
-    #             )
-    #     extra_time_made = fit_t0 * np.log((extra_resp_made - fit_i_0) / fit_pk0) + avg_time[p_t_p + start_pos]
-    #     extra_resp = exp_decay((extra_time_made - avg_time[p_t_p + start_pos]), fit_i_0, fit_pk0, fit_t0)
-    #     plt.plot(time_section, response_section, "bo")
-    #     plt.plot(extra_time_made, extra_resp, "go", markersize=12)
-    #     plt.plot(
-    #             time_section,
-    #             exp_decay((time_section - avg_time[p_t_p + start_pos]), fit_i_0, fit_pk0, fit_t0),
-    #             "g"
-    #             )
-    #     bins = [(start <= time_section) & (time_section < end) for start, end in pairwise(np.flip(extra_time_made))]
-    #     binned_resp = remove_nan(np.array([np.nanmean(response_section[section]) for section in bins]))
-    #     binned_var = remove_nan(np.array([np.nanmean(variance_section[section]) for section in bins]))
-    #     binned_resp_clean = binned_resp[binned_resp < self.std * self.direction * n_limit]  # removing background noise
-    #     binned_var_clean = binned_var[binned_resp < self.std * self.direction * n_limit]  # removing background noise
-    #     coefficients = parabolic_fit(
-    #             binned_resp_clean,
-    #             binned_var_clean
-    #             )
-    #     intercept = coefficients[0]
-    #     unitary_current = coefficients[1]
-    #     channel_count = -1 / coefficients[2]
-    #     p_0 = np.min(binned_resp_clean) / (unitary_current * channel_count)
-    #     self.ps_nsfa_values = {
-    #             "intercept"      : intercept,
-    #             "i"              : unitary_current,
-    #             "N"              : channel_count,
-    #             "p_0"            : p_0,
-    #             "binned_current" : binned_resp_clean,
-    #             "binned_variance": binned_var_clean,
-    #             "#events"        : n_e
-    #             }
 
     def plot_ps_nsfa(self, axis_lim=((-10, 1), (1, 10))):
         # Implement the plotting of current vs variance for psNSFA
@@ -2317,49 +2266,13 @@ class EvtPro(Analyzer):
         plt.legend(loc='upper left')
         plt.show(block=False)
 
-    # def plot_ps_nsfa(self, axis_lim=((-10, 1), (1, 10))):
-    #     # Implement the plotting of current vs variance for psNSFA
-    #     current = self.ps_nsfa_values["binned_current"]
-    #     variance = self.ps_nsfa_values["binned_variance"]
-    #     intercept = self.ps_nsfa_values["intercept"]
-    #     unitary_current = self.ps_nsfa_values["i"]
-    #     channel_count = self.ps_nsfa_values["N"]
-    #     p_0 = self.ps_nsfa_values["p_0"]
-    #     n_e = self.ps_nsfa_values["#events"]
-    #     # Plotting psNSFA
-    #     plt.figure(figsize=(3, 2.5))
-    #     plt.axhline(0.0, color="k", linestyle='--')
-    #     plt.axvline(0.0, color="k", linestyle='--')
-    #     plt.axvline(self.std * 3.0 * self.direction, color="r", linestyle='--')
-    #     plt.axvline(self.std * 2.0 * self.direction, color="r", linestyle='--')
-    #     plt.axvline(self.std * self.direction, color="r", linestyle='--')
-    #     plt.plot(current, variance, "ko")
-    #     artificial_current = np.linspace(
-    #             0.0,
-    #             np.min(current),
-    #             np.round(np.abs(np.min(current))).astype(int)
-    #             )
-    #     label = f"0:{intercept:2.1f},i:{unitary_current:2.1f},N:{channel_count:2.1f},P0:{p_0:1.2f} {n_e}"
-    #     plt.plot(
-    #             artificial_current,
-    #             unitary_current * artificial_current - np.power(artificial_current, 2) / channel_count,
-    #             "r:",
-    #             label=label,
-    #             )
-    #     (x0, x1), (y0, y1) = axis_lim
-    #     plt.axhline(intercept, color="r", linestyle='--')
-    #     plt.xlim(x0, x1)  # Set x-axis limits from 0 to 6
-    #     plt.ylim(y0, y1)  # Set y-axis limits from 5 to 35
-    #     plt.title(f"Average and Var around the mean {self.time[0]:4.2f} {self.time[-1]:4.2f}")
-    #     plt.legend(loc='upper left')
-    #     plt.show(block=False)
-
     @timing
     def get_auc(self, already_adjusted=True):
         b_amp = 0
 
         # RAM FIX: Iterate over a list of keys instead of deepcopying the whole dictionary
         initial_event_count = len(self.events_attrs)
+        plt.figure()  # delete me after
         for evt_pos in list(self.events_attrs.keys()):
             evt = self.events_attrs[evt_pos]  # SPEED FIX: Bind locally to avoid repeated lookups
 
@@ -2382,11 +2295,22 @@ class EvtPro(Analyzer):
                     case _:
                         print("Wrong direction in AUC")
             end_pos = peak_pos + crossing_pos
+
             area = calculate_area(
                     evt["t_segm"][start_pos:end_pos],
                     evt["r_segm"][start_pos:end_pos] - b_amp
                     )
+
+            if area >= -0.04:
+                plt.plot(
+                        evt["t_segm"][start_pos:end_pos],
+                        evt["r_segm"][start_pos:end_pos] - b_amp
+                        )  # delete me after
+
             evt["r_auc"] = area
+
+        plt.title("Testing AUC, delete me after...")  # delete me after
+        plt.show(block=False)  # delete me after
 
         print(f" Accepted events: {len(self.events_attrs)}, Rejected: {initial_event_count - len(self.events_attrs)}")
 
@@ -2540,8 +2464,9 @@ class EvtPro(Analyzer):
         # 2. Assign the frequencies into those specific 'True' slots
         ifreq_timecourse_full[mask] = ifreq_timecourse[1]
         n_p = vtp(kernel_length, self.t_delta)
-        smoothed_ifreq = smoothing(ifreq_timecourse_full, n_p, 2)
+        smoothed_ifreq, kernel_sd = smoothing(ifreq_timecourse_full, n_p, 2, 'g', 1 / self.t_delta)
         kernel = conv_vector(n_p, 'g', 2)
+        print(f"<----------------->In self.burst: kernel-SD = {get_real_kernel_sd(kernel, 1 / self.t_delta)}")
         single_pulse = np.zeros(2 * n_p)
         single_pulse[n_p] = ifreq_timecourse[1][0]
         min_convolved = fftconvolve(single_pulse, kernel, mode='same')
@@ -2658,11 +2583,10 @@ class EvtPro(Analyzer):
         fig, ax = plt.subplots(figsize=(5, 2.5))
         plt.rcParams.update({'font.size': 8})
         ax.axhline(y=0.0, color="k", linestyle='--')
-        # Added label for the main recording
         ax.plot(self.time, self.resp, "k", linewidth=1.5, alpha=0.1, label="Recording")
 
         if show_events:
-            events_labeled = False  # Prevents duplicate legend entries from the loop
+            events_labeled = False
             for evt in self.events_attrs.values():
                 t_o_p = evt["t_o_p"]
                 t_segm = evt["t_segm"]
@@ -2673,17 +2597,11 @@ class EvtPro(Analyzer):
                 b_amp = evt["b_amp"]
                 threshold_segm = evt["threshold_segm"]
 
-                # --- Draw the baseline for this specific event segment ---
                 x_time = t_segm + t_o_p
                 if len(x_time) > 0:
                     ax.hlines(
-                            y=b_amp,
-                            xmin=x_time[0],
-                            xmax=x_time[-1],
-                            colors="k",
-                            linewidth=1.5,
-                            alpha=0.6,
-                            label="Event Baseline" if not events_labeled else None
+                            y=b_amp, xmin=x_time[0], xmax=x_time[-1], colors="k",
+                            linewidth=1.5, alpha=0.6, label="Event Baseline" if not events_labeled else None
                             )
 
                 if not adjust:
@@ -2692,84 +2610,82 @@ class EvtPro(Analyzer):
                 if threshold_segm is not None:
                     ap_threshold = evt["ap_threshold"]
                     idx_t = np.nonzero(threshold_segm)[0]
-                    # "bo" plots independent dots, so standard ax.plot is safe here
                     ax.plot(
                             (t_segm + t_o_p)[idx_t], (b_amp + threshold_segm * (ap_threshold - b_amp))[idx_t], "bo",
                             label="Threshold" if not events_labeled else None
                             )
 
-                # --- Squeeze the binary segment arrays ---
-                # z_segm remains plotted as a continuous line per the original code
                 idx_z = np.nonzero(z_segm)[0]
                 if idx_z.size > 0:
                     ax.vlines(
-                            x=(t_segm + t_o_p)[idx_z],
-                            ymin=b_amp,
-                            ymax=(b_amp + z_segm * amplitude / 4)[idx_z],
-                            colors="g",
-                            label="Zero pass" if not events_labeled else None
+                            x=(t_segm + t_o_p)[idx_z], ymin=b_amp, ymax=(b_amp + z_segm * amplitude / 4)[idx_z],
+                            colors="g", label="Zero pass" if not events_labeled else None
                             )
 
-                # Replaced with np.nonzero and ax.vlines to draw true vertical markers
                 idx_s = np.nonzero(s_segm)[0]
                 if idx_s.size > 0:
                     ax.vlines(
-                            x=(t_segm + t_o_p)[idx_s],
-                            ymin=b_amp,
-                            ymax=(b_amp + s_segm * amplitude / 2)[idx_s],
-                            colors="b",
-                            label="Slope" if not events_labeled else None
+                            x=(t_segm + t_o_p)[idx_s], ymin=b_amp, ymax=(b_amp + s_segm * amplitude / 2)[idx_s],
+                            colors="b", label="Slope" if not events_labeled else None
                             )
 
-                # Replaced with np.nonzero and ax.vlines for clean peak markers
                 idx_p = np.nonzero(p_segm)[0]
                 if idx_p.size > 0:
                     ax.vlines(
-                            x=(t_segm + t_o_p)[idx_p],
-                            ymin=b_amp,
-                            ymax=(b_amp + p_segm * amplitude)[idx_p],
-                            colors="r",
-                            linewidth=1,
-                            label="Peak" if not events_labeled else None
+                            x=(t_segm + t_o_p)[idx_p], ymin=b_amp, ymax=(b_amp + p_segm * amplitude)[idx_p],
+                            colors="r", linewidth=1, label="Peak" if not events_labeled else None
                             )
-
-                events_labeled = True  # Set to True so subsequent iterations pass 'None' to label
+                events_labeled = True
 
         if self.ifreq_blocks.size:
-            # --- Downsample the heavy continuous frequency arrays by 10 using [::10] ---
-            # Grabs active regions and applies the explicit [::10] downsampling slice
             idx_blocks = np.nonzero(self.ifreq_blocks)[0][::10]
             if idx_blocks.size > 0:
                 ax.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
                 ax.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
 
             burst_freq_power = np.array(
-                    [
-                            self.get_arr("burst_start_time", "burst"),
-                            self.get_arr("burst_freq_power", "burst")
-                            ]
+                    [self.get_arr("burst_start_time", "burst"), self.get_arr("burst_freq_power", "burst")]
                     )
-            # Reduced marker size (ms) to 10.0 per the original code
             ax.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
 
         ax.set_title(f"{self.sweep_index=} {title} {len(self.events_attrs)}.")
-        # Trigger the legend to display (loc='best' avoids overlapping data)
         ax.legend(loc='best', framealpha=0.7)
 
         # ---------------------------------------------------------
-        # ASYNC RAM CLEARING BLOCK (Non-Blocking)
+        # DYNAMIC AUTO-SAVE BLOCK (USING PROPER CLASS METHODS)
+        # ---------------------------------------------------------
+        start_s = int(self.time[0])
+        end_s = int(self.time[-1])
+        events_num = len(self.events_attrs)
+
+        try:
+            # Fetch directly from the instance exactly like get_names()
+            file_name = self.get_info('file', 'name').replace(".", "_")
+            file_parent_base = self.get_info('file', 'parent')
+
+            # Reconstruct the exact directory structure from setup_workspace()
+            target_dir = os.path.join(file_parent_base, file_name) + os.sep
+            os.makedirs(target_dir, exist_ok=True)  # Failsafe in case it doesn't exist
+
+            # Build the final string avoiding missing external functions like make_name
+            out_name = f"{target_dir}{file_name}_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_all_{events_num}.png"
+        except Exception as e:
+            print(f"Name resolution failed: {e}. Using fallback name.")
+            out_name = f"recording_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_all_{events_num}.png"
+
+        fig.savefig(out_name, dpi=300, bbox_inches='tight')
+
+        # ---------------------------------------------------------
+        # ASYNC RAM CLEARING BLOCK
         # ---------------------------------------------------------
         def on_close(event):
-            # When the user clicks the "X", wipe this specific figure from RAM
             event.canvas.figure.clear()
             plt.close(event.canvas.figure)
             import gc
 
             gc.collect()
 
-        # Connect the callback
         fig.canvas.mpl_connect('close_event', on_close)
-        # Show the plot and immediately return control to the main script
         plt.show(block=False)
         fig.canvas.draw()
 
@@ -2794,7 +2710,30 @@ class EvtPro(Analyzer):
         ax.set_title(f"{self.sweep_index=} {title} {events_num}.")
 
         # ---------------------------------------------------------
-        # ASYNC RAM CLEARING BLOCK (Non-Blocking)
+        # DYNAMIC AUTO-SAVE BLOCK (USING PROPER CLASS METHODS)
+        # ---------------------------------------------------------
+        start_s = int(self.time[0])
+        end_s = int(self.time[-1])
+
+        try:
+            # Fetch directly from the instance exactly like get_names()
+            file_name = self.get_info('file', 'name').replace(".", "_")
+            file_parent_base = self.get_info('file', 'parent')
+
+            # Reconstruct the exact directory structure from setup_workspace()
+            target_dir = os.path.join(file_parent_base, file_name) + os.sep
+            os.makedirs(target_dir, exist_ok=True)  # Failsafe
+
+            # Build the final string ("aligned" modifier)
+            out_name = f"{target_dir}{file_name}_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_aligned_{events_num}.png"
+        except Exception as e:
+            print(f"Name resolution failed: {e}. Using fallback name.")
+            out_name = f"recording_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_aligned_{events_num}.png"
+
+        fig.savefig(out_name, dpi=300, bbox_inches='tight')
+
+        # ---------------------------------------------------------
+        # ASYNC RAM CLEARING BLOCK
         # ---------------------------------------------------------
         def on_close(event):
             event.canvas.figure.clear()

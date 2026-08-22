@@ -105,7 +105,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
                 raw_diff = curr[1] - base_resp_0[1]
             else:
                 raw_diff = base_resp_0[1]
-            smoothed_diff = smoothing(raw_diff, n_p, 2)
+            smoothed_diff, kernel_sd = smoothing(raw_diff, n_p, 2, 'g', 1/rec.t_delta)
             iv_save_list.append(smoothed_diff)
 
             # Stack into a 2D array: [Voltage, Current_1, Current_2, ...] and Save

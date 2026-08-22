@@ -1,9 +1,9 @@
 import gc
-import os
+# import os
 
-from PyQt6.QtCore import QSettings, Qt, pyqtSignal
+from PyQt6.QtCore import QSettings, Qt
 
-from lib_utility import get_previous_folder, load_dict, save_dict, save_previous_folder
+from lib_utility import load_dict, save_dict
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
     QApplication, QDoubleSpinBox, QHBoxLayout, QSlider, QSpinBox, QWidget, QDialog, QLabel, QLineEdit, QPushButton,
@@ -189,47 +189,6 @@ class AnalysisSelector(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error loading file: {e}")
             self.status_label.setText(f"Error loading file: {e}")
-    # def select_file(self):
-    #     global _current_plot  # Bring in the global tracker
-    #
-    #     # --- MEMORY CLEARING BLOCK ---
-    #     # 1. Destroy the global Matplotlib figure keeping the data alive
-    #     if _current_plot:
-    #         _current_plot.clf()
-    #         plt.close(_current_plot)
-    #         _current_plot = None
-    #
-    #     plt.close('all')
-    #
-    #     # 2. Drop the explicit object reference
-    #     self.original = None
-    #
-    #     # 3. Force garbage collection NOW, before the new file loads
-    #     import gc
-    #
-    #     gc.collect()
-    #     # -----------------------------
-    #
-    #     previous_folder = get_previous_folder(self.title)
-    #     if not previous_folder:
-    #         previous_folder = os.path.expanduser("~")
-    #
-    #     try:
-    #         file_path, _ = open_file_dialog(self, previous_folder, "ABF Files (*.abf);; CSV Files (*.csv *.CSV)")
-    #         if file_path:
-    #             save_previous_folder(os.path.dirname(file_path), self.title)
-    #
-    #             self.location = self.location_spinbox.value()
-    #             from lib_event_detection import EvtPro
-    #             # Load the NEW file
-    #             self.original = EvtPro(file_path, True, self.location)
-    #             show_plot(self.original, title="Total response.")
-    #             print(f"{self.original = }")
-    #             self.status_label.setText(f"Loaded: {os.path.basename(file_path)}")
-    #
-    #     except Exception as e:
-    #         QMessageBox.critical(self, "Error", f"Error loading file: {e}")
-    #         self.status_label.setText(f"Error loading file: {e}")
 
     def run_analyses(self):
         # --- MEMORY CLEARING BLOCK ---
@@ -658,31 +617,6 @@ class ConstDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error loading configuration: {e}")
             self.status_label.setText(f"Error loading file: {e}")
-    # def select_file(self):
-    #     print(f"Delete after {self.title=}")
-    #     previous_folder = get_previous_folder(self.title)
-    #     print(f"Delete after {previous_folder=}")
-    #     if not previous_folder:
-    #         previous_folder = os.path.expanduser("~")
-    #         print(f"Delete after ~{previous_folder=}")
-    #     try:
-    #         file_path, _ = open_file_dialog(self, previous_folder, "JSON Files (*.json)")
-    #         print(f"Delete after {file_path=}")
-    #         if file_path:
-    #             save_previous_folder(os.path.dirname(file_path), self.title)
-    #
-    #             # 1. Load the new data directly into the result dictionary
-    #             loaded_dict = load_dict(file_path, self.result)
-    #             print(f"Delete after {loaded_dict=}")
-    #             self.result = loaded_dict.copy()
-    #
-    #             # 2. Skip the UI rebuild entirely and just close the dialog!
-    #             self.accept()
-    #
-    #     except Exception as e:
-    #         QMessageBox.critical(self, "Error", f"Error loading file: {e}")
-    #         print(f"Delete after Error loading file: {e}")
-    #         self.status_label.setText(f"Error loading file: {e}")
 
     def closeEvent(self, event):
         # Remove closeEvent, accept() handles it.
