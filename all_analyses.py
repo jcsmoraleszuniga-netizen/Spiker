@@ -25,12 +25,12 @@ def main() -> None:
     """
     app = QApplication(sys.argv)
     programs_dict = {
-            "Response filtering"                : cf.main,
             "Shift correction"                  : sc.main,
             "Resistance analysis"               : rr.main,
             "I-V analysis"                      : iv.main,
-            "Event detection and analysis"      : ce.main,
             "Remove control pulses"             : cl.main,
+            "Response filtering"                : cf.main,
+            "Event detection and analysis"      : ce.main,
             "Down sampling"                     : cr.main,
             "Manual AUC analysis"               : cap.main,
             }

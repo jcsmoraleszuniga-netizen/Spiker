@@ -112,96 +112,96 @@ def _get_sparse_indices(arr):
     return np.unique(np.clip(idx, 0, len(arr) - 1))
 
 
-@timing
-def plot_adaptive_analysis(rec, smooth, der, sder, title="Adaptive Threshold Analysis"):
-    """
-    Displays a 2x2 grid of response and derivative plots alongside their
-    adaptive threshold differences. Incorporates scorched-earth memory
-    management and event loop handling for safe, non-blocking execution.
-    """
-    # ---------------------------------------------------------
-    # PRE-CALCULATE DIFFERENCES
-    # ---------------------------------------------------------
-    diff_resp_g_conv_resp = rec.resp - rec.adaptive_sresp
-    diff_sresp_g_conv_sresp = smooth.resp - smooth.adaptive_sresp
-    diff_derv_g_conv_derv = der.resp - der.adaptive_sresp
-    diff_sderv_g_conv_sderv = sder.resp - sder.adaptive_sresp
-
-    # ---------------------------------------------------------
-    # FIGURE & AXES SETUP
-    # ---------------------------------------------------------
-    # Create 2x2 subplots sharing the X-axis for synchronized zooming/panning
-    fig, axs = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
-    ax1, ax2 = axs[0, 0], axs[0, 1]
-    ax3, ax4 = axs[1, 0], axs[1, 1]
-
-    if title:
-        fig.suptitle(title, fontsize=14)
-
-    # Format all axes with a zero-line baseline
-    for ax in [ax1, ax2, ax3, ax4]:
-        ax.axhline(y=0.0, color='k', linestyle='dashed', linewidth=1, alpha=0.5)
-
-    # ---------------------------------------------------------
-    # ROW 1, COLUMN 1: Response
-    # ---------------------------------------------------------
-    ax1.plot(rec.time, rec.resp, 'r', label="rec.resp")
-    ax1.plot(smooth.time, smooth.resp, 'k', label="smooth.resp")
-    ax1.plot(smooth.time, smooth.adaptive_sresp, 'b:', label="adaptive_sresp")
-    ax1.plot(smooth.time, smooth.peak_noise, 'g:')
-    ax1.set_title("Response (smooth.resp)")
-
-    # ---------------------------------------------------------
-    # ROW 1, COLUMN 2: Derivative
-    # ---------------------------------------------------------
-    ax2.plot(rec.time, rec.derivative, 'r', label="rec.derivative")
-    ax2.plot(sder.time, sder.resp, 'k', label="sder.resp")
-    ax2.plot(sder.time, sder.adaptive_sresp, 'b:', label="sder.adaptive_sresp")
-    ax2.plot(sder.time, sder.peak_noise, 'g:')
-    ax2.set_title("Derivative (der.resp)")
-
-    # ---------------------------------------------------------
-    # ROW 2, COLUMN 1: Response Difference
-    # ---------------------------------------------------------
-    ax3.plot(rec.time, diff_resp_g_conv_resp, 'r')
-    ax3.plot(smooth.time, diff_sresp_g_conv_sresp, 'k')
-    ax3.plot(smooth.time, smooth.direction * smooth.interpolated_sd, 'g:')
-    ax3.set_title("smooth.resp - smooth.adaptive_sresp")
-    ax3.set_xlabel("Time")
-
-    # ---------------------------------------------------------
-    # ROW 2, COLUMN 2: Derivative Difference
-    # ---------------------------------------------------------
-    ax4.plot(der.time, diff_derv_g_conv_derv, 'r')
-    ax4.plot(sder.time, diff_sderv_g_conv_sderv, 'k')
-    ax4.plot(sder.time, sder.direction * sder.interpolated_sd, 'g:')
-    ax4.set_title("sder.resp - sder.adaptive_sresp")
-    ax4.set_xlabel("Time")
-
-    plt.tight_layout()
-
-    # ---------------------------------------------------------
-    # MATPLOTLIB EVENT LOOP & RAM CLEARING
-    # ---------------------------------------------------------
-    plt.show(block=False)
-    fig.canvas.draw()
-
-    def on_close(event):
-        event.canvas.stop_event_loop()
-
-    cid = fig.canvas.mpl_connect('close_event', on_close)
-    fig.canvas.start_event_loop(timeout=0)
-
-    # SCORCHED EARTH RAM CLEARING
-    fig.canvas.mpl_disconnect(cid)
-    fig.clear()
-    plt.close(fig)
-    plt.close('all')
-
-    # Delete heavy local arrays and objects to force memory deallocation immediately
-    del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv
-    del fig, axs, ax1, ax2, ax3, ax4
-    gc.collect()
+# @timing
+# def plot_adaptive_analysis(rec, smooth, der, sder, title="Adaptive Threshold Analysis"):
+#     """
+#     Displays a 2x2 grid of response and derivative plots alongside their
+#     adaptive threshold differences. Incorporates scorched-earth memory
+#     management and event loop handling for safe, non-blocking execution.
+#     """
+#     # ---------------------------------------------------------
+#     # PRE-CALCULATE DIFFERENCES
+#     # ---------------------------------------------------------
+#     diff_resp_g_conv_resp = rec.resp - rec.adaptive_sresp
+#     diff_sresp_g_conv_sresp = smooth.resp - smooth.adaptive_sresp
+#     diff_derv_g_conv_derv = der.resp - der.adaptive_sresp
+#     diff_sderv_g_conv_sderv = sder.resp - sder.adaptive_sresp
+#
+#     # ---------------------------------------------------------
+#     # FIGURE & AXES SETUP
+#     # ---------------------------------------------------------
+#     # Create 2x2 subplots sharing the X-axis for synchronized zooming/panning
+#     fig, axs = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
+#     ax1, ax2 = axs[0, 0], axs[0, 1]
+#     ax3, ax4 = axs[1, 0], axs[1, 1]
+#
+#     if title:
+#         fig.suptitle(title, fontsize=14)
+#
+#     # Format all axes with a zero-line baseline
+#     for ax in [ax1, ax2, ax3, ax4]:
+#         ax.axhline(y=0.0, color='k', linestyle='dashed', linewidth=1, alpha=0.5)
+#
+#     # ---------------------------------------------------------
+#     # ROW 1, COLUMN 1: Response
+#     # ---------------------------------------------------------
+#     ax1.plot(rec.time, rec.resp, 'r', label="rec.resp")
+#     ax1.plot(smooth.time, smooth.resp, 'k', label="smooth.resp")
+#     ax1.plot(smooth.time, smooth.adaptive_sresp, 'b:', label="adaptive_sresp")
+#     ax1.plot(smooth.time, smooth.peak_noise, 'g:')
+#     ax1.set_title("Response (smooth.resp)")
+#
+#     # ---------------------------------------------------------
+#     # ROW 1, COLUMN 2: Derivative
+#     # ---------------------------------------------------------
+#     ax2.plot(rec.time, rec.derivative, 'r', label="rec.derivative")
+#     ax2.plot(sder.time, sder.resp, 'k', label="sder.resp")
+#     ax2.plot(sder.time, sder.adaptive_sresp, 'b:', label="sder.adaptive_sresp")
+#     ax2.plot(sder.time, sder.peak_noise, 'g:')
+#     ax2.set_title("Derivative (der.resp)")
+#
+#     # ---------------------------------------------------------
+#     # ROW 2, COLUMN 1: Response Difference
+#     # ---------------------------------------------------------
+#     ax3.plot(rec.time, diff_resp_g_conv_resp, 'r')
+#     ax3.plot(smooth.time, diff_sresp_g_conv_sresp, 'k')
+#     ax3.plot(smooth.time, smooth.direction * smooth.interpolated_sd, 'g:')
+#     ax3.set_title("smooth.resp - smooth.adaptive_sresp")
+#     ax3.set_xlabel("Time")
+#
+#     # ---------------------------------------------------------
+#     # ROW 2, COLUMN 2: Derivative Difference
+#     # ---------------------------------------------------------
+#     ax4.plot(der.time, diff_derv_g_conv_derv, 'r')
+#     ax4.plot(sder.time, diff_sderv_g_conv_sderv, 'k')
+#     ax4.plot(sder.time, sder.direction * sder.interpolated_sd, 'g:')
+#     ax4.set_title("sder.resp - sder.adaptive_sresp")
+#     ax4.set_xlabel("Time")
+#
+#     plt.tight_layout()
+#
+#     # ---------------------------------------------------------
+#     # MATPLOTLIB EVENT LOOP & RAM CLEARING
+#     # ---------------------------------------------------------
+#     plt.show(block=False)
+#     fig.canvas.draw()
+#
+#     def on_close(event):
+#         event.canvas.stop_event_loop()
+#
+#     cid = fig.canvas.mpl_connect('close_event', on_close)
+#     fig.canvas.start_event_loop(timeout=0)
+#
+#     # SCORCHED EARTH RAM CLEARING
+#     fig.canvas.mpl_disconnect(cid)
+#     fig.clear()
+#     plt.close(fig)
+#     plt.close('all')
+#
+#     # Delete heavy local arrays and objects to force memory deallocation immediately
+#     del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv
+#     del fig, axs, ax1, ax2, ax3, ax4
+#     gc.collect()
 
 
 @timing
@@ -209,42 +209,34 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     """
     Displays two vertically stacked plots sharing the X-axis.
     Plots all points in the recording without decimation, while retaining
-    exact indices and vlines for accurate, fast peak rendering.
+    exact indices and vlines for accurate, fast peak rendering using
+    blended transforms to keep markers viewport-centered on Y.
     """
-    # Create two subplots stacked vertically
     fig, (ax1, ax2) = plt.subplots(
             2, 1, sharex=True, figsize=(9, 7),
             gridspec_kw={'height_ratios': [1, 1]}
             )
 
     # ---------------------------------------------------------
-    # DYNAMIC SCALING & NORMALIZATION
+    # DYNAMIC SCALING (NORMALIZED TO AXES FRACTION 0.0 - 0.5)
     # ---------------------------------------------------------
-    # 1. Base maximum for the derivative background
-    max_amp_der = np.max(np.abs(rec.derivative)) if len(rec.derivative) > 0 else 1.0
+    # Max peak line extent will occupy up to 30% above/below center (0.5 +/- 0.3)
+    max_abs_peak = np.max(np.abs(rec.peaks)) if len(rec.peaks) > 0 else 1.0
+    if max_abs_peak == 0: max_abs_peak = 1.0
+    norm_peaks = (np.abs(rec.peaks) / max_abs_peak) * 0.3
 
-    # 2. Normalize rec.peaks to max absolute amplitude of 60.0
-    max_abs_peak = np.max(np.abs(rec.peaks))
-    if max_abs_peak == 0: max_abs_peak = 1.0  # Prevent division by zero
-    scaled_peaks = rec.peaks * (120.0 / max_abs_peak)
-
-    # 3. Normalize rec.der_peaks to max absolute amplitude of max_amp_der
-    max_abs_der_peak = np.max(np.abs(rec.der_peaks))
-    if max_abs_der_peak == 0: max_abs_der_peak = 1.0  # Prevent division by zero
-    scaled_der_peaks = rec.der_peaks * (max_amp_der / max_abs_der_peak)
+    max_abs_der_peak = np.max(np.abs(rec.der_peaks)) if len(rec.der_peaks) > 0 else 1.0
+    if max_abs_der_peak == 0: max_abs_der_peak = 1.0
+    norm_der_peaks = (np.abs(rec.der_peaks) / max_abs_der_peak) * 0.3
 
     # --- Array Indexing Setup ---
-    # Find the EXACT integer locations where the peaks and crossings exist
     idx_p = np.nonzero(rec.peaks)[0]
     idx_dp = np.nonzero(rec.der_peaks)[0]
     idx_zp = np.nonzero(rec.zero_pass)[0]
 
-    # Extract boundary indices from the list of tuples (peak_idx, start_idx, end_idx)
     idx_bounds = []
     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
         for _, start, end in rec.peak_boundaries:
-            # We subtract 1 from 'end' because standard Python slicing is exclusive,
-            # so the actual final point of the boundary is at end - 1.
             idx_bounds.extend([start, min(end - 1, len(rec.time) - 1)])
     idx_bounds = np.array(idx_bounds, dtype=int)
 
@@ -259,34 +251,31 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     # ---------------------------------------------------------
     ax1.plot(rec.time, rec.resp, "k", linewidth=2.5, label="Response")
 
-    # Draw true vertical lines from the 0 baseline to the scaled peak value
+    # Draw vertical lines centered at y=0.5 in Axes space (viewport plane)
     ax1.vlines(
             x=rec.time[idx_p],
-            ymin=-scaled_peaks[idx_p],
-            ymax=scaled_peaks[idx_p],
+            ymin=0.5 - norm_peaks[idx_p],
+            ymax=0.5 + norm_peaks[idx_p],
             colors="r",
             linewidth=2.0,
-            alpha=0.6
+            alpha=1.0,
+            transform=ax1.get_xaxis_transform()
             )
 
-    # Draw true vertical lines for the peak boundaries (start and end limits)
+    # Draw boundary markers centered at y=0.5 with fixed fractional height
     if len(idx_bounds) > 0:
-        # Scale boundary markers to 25% of the max scaled peak height (60.0)
-        # and lock to the recording direction
-        bound_height = 15.0 * rec.direction
-
         ax1.vlines(
                 x=rec.time[idx_bounds],
-                ymin=-bound_height,
-                ymax=bound_height,
-                colors="k",
-                linewidth=1.0,
-                alpha=0.1,
-                linestyle='--'
+                ymin=0.4,
+                ymax=0.6,
+                colors="g",
+                linewidth=2.0,
+                alpha=0.5,
+                linestyle='--',
+                transform=ax1.get_xaxis_transform()
                 )
 
-    # Plot ALL points of the noise trace without decimation
-    ax1.plot(rec.time, rec.peak_noise, "k:", alpha=0.4)
+    ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.75)
     ax1.set_ylabel("Response (rec)")
     ax1.set_title(title)
 
@@ -296,37 +285,37 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
     ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
 
-    # Draw true vertical lines for the derivative peaks using the normalized array
+    # Draw derivative peak lines centered at y=0.5 in Axes space
     ax2.vlines(
             x=rec.time[idx_dp],
-            ymin=-scaled_der_peaks[idx_dp],
-            ymax=scaled_der_peaks[idx_dp],
+            ymin=0.5 - norm_der_peaks[idx_dp],
+            ymax=0.5 + norm_der_peaks[idx_dp],
             colors="r",
             linewidth=2.0,
-            alpha=0.6
+            alpha=1.0,
+            transform=ax2.get_xaxis_transform()
             )
 
-    # Zero pass: Strip the inherent -1 signs, scale by 25% of max slope, lock to direction
-    zp_heights = np.abs(rec.zero_pass) * (max_amp_der * 0.25) * rec.direction
+    # Zero pass markers centered at y=0.5 with relative scale
+    max_zp = np.max(np.abs(rec.zero_pass)) if len(rec.zero_pass) > 0 else 1.0
+    if max_zp == 0: max_zp = 1.0
+    norm_zp = (np.abs(rec.zero_pass) / max_zp) * 0.15
 
-    # Draw true vertical lines for the zero-pass markers
     ax2.vlines(
             x=rec.time[idx_zp],
-            ymin=-zp_heights[idx_zp],
-            ymax=zp_heights[idx_zp],
-            colors="k",
-            linewidth=1.0,
-            alpha=0.1,
-            linestyle='--'
+            ymin=0.5 - norm_zp[idx_zp],
+            ymax=0.5 + norm_zp[idx_zp],
+            colors="g",
+            linewidth=2.0,
+            alpha=0.5,
+            linestyle='--',
+            transform=ax2.get_xaxis_transform()
             )
 
-    # Plot ALL points of the noise trace without decimation (NOTE: verify attribute name here)
-    ax2.plot(rec.time, rec.der_peak_noise, "b:", alpha=0.4)
+    ax2.plot(rec.time, rec.der_peak_noise, "r:", alpha=0.75)
     ax2.set_ylabel("Derivative (rec.derivative)")
     ax2.set_xlabel("Time")
-    #     ax2.plot(der.time, der.peak_noise, "b:", alpha=0.4)
-    #     ax2.set_ylabel("Derivative (der)")
-    #     ax2.set_xlabel("Time")
+
     plt.tight_layout()
 
     # --- Matplotlib Event Loop & RAM Clearing ---
@@ -339,13 +328,155 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     cid = fig.canvas.mpl_connect('close_event', on_close)
     fig.canvas.start_event_loop(timeout=0)
 
-    # SCORCHED EARTH RAM CLEARING
     fig.canvas.mpl_disconnect(cid)
     fig.clear()
     plt.close(fig)
     plt.close('all')
     del fig, ax1, ax2
     gc.collect()
+
+
+# def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
+#     """
+#     Displays two vertically stacked plots sharing the X-axis.
+#     Plots all points in the recording without decimation, while retaining
+#     exact indices and vlines for accurate, fast peak rendering.
+#     """
+#     # Create two subplots stacked vertically
+#     fig, (ax1, ax2) = plt.subplots(
+#             2, 1, sharex=True, figsize=(9, 7),
+#             gridspec_kw={'height_ratios': [1, 1]}
+#             )
+#
+#     # ---------------------------------------------------------
+#     # DYNAMIC SCALING & NORMALIZATION
+#     # ---------------------------------------------------------
+#     # 1. Base maximum for the derivative background
+#     max_amp_der = np.max(np.abs(rec.derivative)) if len(rec.derivative) > 0 else 1.0
+#
+#     # 2. Normalize rec.peaks to max absolute amplitude of 60.0
+#     max_abs_peak = np.max(np.abs(rec.peaks))
+#     if max_abs_peak == 0: max_abs_peak = 1.0  # Prevent division by zero
+#     scaled_peaks = rec.peaks * (120.0 / max_abs_peak)
+#
+#     # 3. Normalize rec.der_peaks to max absolute amplitude of max_amp_der
+#     max_abs_der_peak = np.max(np.abs(rec.der_peaks))
+#     if max_abs_der_peak == 0: max_abs_der_peak = 1.0  # Prevent division by zero
+#     scaled_der_peaks = rec.der_peaks * (max_amp_der / max_abs_der_peak)
+#
+#     # --- Array Indexing Setup ---
+#     # Find the EXACT integer locations where the peaks and crossings exist
+#     idx_p = np.nonzero(rec.peaks)[0]
+#     idx_dp = np.nonzero(rec.der_peaks)[0]
+#     idx_zp = np.nonzero(rec.zero_pass)[0]
+#
+#     # Extract boundary indices from the list of tuples (peak_idx, start_idx, end_idx)
+#     idx_bounds = []
+#     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
+#         for _, start, end in rec.peak_boundaries:
+#             # We subtract 1 from 'end' because standard Python slicing is exclusive,
+#             # so the actual final point of the boundary is at end - 1.
+#             idx_bounds.extend([start, min(end - 1, len(rec.time) - 1)])
+#     idx_bounds = np.array(idx_bounds, dtype=int)
+#
+#     # --- Formatting both axes ---
+#     for ax in [ax1, ax2]:
+#         ax.axhline(y=0.0, color="k", linestyle='--', alpha=0.5)
+#         for x_val in values_x:
+#             ax.axvline(x=x_val, color="r", linestyle='--', alpha=0.6)
+#
+#     # ---------------------------------------------------------
+#     # TOP PLOT (REC)
+#     # ---------------------------------------------------------
+#     ax1.plot(rec.time, rec.resp, "k", linewidth=2.5, label="Response")
+#
+#     # Draw true vertical lines from the 0 baseline to the scaled peak value
+#     ax1.vlines(
+#             x=rec.time[idx_p],
+#             ymin=-scaled_peaks[idx_p],
+#             ymax=scaled_peaks[idx_p],
+#             colors="r",
+#             linewidth=2.0,
+#             alpha=0.6
+#             )
+#
+#     # Draw true vertical lines for the peak boundaries (start and end limits)
+#     if len(idx_bounds) > 0:
+#         # Scale boundary markers to 25% of the max scaled peak height (60.0)
+#         # and lock to the recording direction
+#         bound_height = 15.0 * rec.direction
+#
+#         ax1.vlines(
+#                 x=rec.time[idx_bounds],
+#                 ymin=-bound_height,
+#                 ymax=bound_height,
+#                 colors="k",
+#                 linewidth=1.0,
+#                 alpha=0.1,
+#                 linestyle='--'
+#                 )
+#
+#     # Plot ALL points of the noise trace without decimation
+#     ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.4)
+#     ax1.set_ylabel("Response (rec)")
+#     ax1.set_title(title)
+#
+#     # ---------------------------------------------------------
+#     # BOTTOM PLOT (DER)
+#     # ---------------------------------------------------------
+#     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
+#     ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
+#
+#     # Draw true vertical lines for the derivative peaks using the normalized array
+#     ax2.vlines(
+#             x=rec.time[idx_dp],
+#             ymin=-scaled_der_peaks[idx_dp],
+#             ymax=scaled_der_peaks[idx_dp],
+#             colors="r",
+#             linewidth=2.0,
+#             alpha=0.6
+#             )
+#
+#     # Zero pass: Strip the inherent -1 signs, scale by 25% of max slope, lock to direction
+#     zp_heights = np.abs(rec.zero_pass) * (max_amp_der * 0.25) * rec.direction
+#
+#     # Draw true vertical lines for the zero-pass markers
+#     ax2.vlines(
+#             x=rec.time[idx_zp],
+#             ymin=-zp_heights[idx_zp],
+#             ymax=zp_heights[idx_zp],
+#             colors="k",
+#             linewidth=1.0,
+#             alpha=0.1,
+#             linestyle='--'
+#             )
+#
+#     # Plot ALL points of the noise trace without decimation (NOTE: verify attribute name here)
+#     ax2.plot(rec.time, rec.der_peak_noise, "r:", alpha=0.4)
+#     ax2.set_ylabel("Derivative (rec.derivative)")
+#     ax2.set_xlabel("Time")
+#     #     ax2.plot(der.time, der.peak_noise, "b:", alpha=0.4)
+#     #     ax2.set_ylabel("Derivative (der)")
+#     #     ax2.set_xlabel("Time")
+#     plt.tight_layout()
+#
+#     # --- Matplotlib Event Loop & RAM Clearing ---
+#     plt.show(block=False)
+#     fig.canvas.draw()
+#
+#     def on_close(event):
+#         event.canvas.stop_event_loop()
+#
+#     cid = fig.canvas.mpl_connect('close_event', on_close)
+#     fig.canvas.start_event_loop(timeout=0)
+#
+#     # SCORCHED EARTH RAM CLEARING
+#     fig.canvas.mpl_disconnect(cid)
+#     fig.clear()
+#     plt.close(fig)
+#     plt.close('all')
+#     del fig, ax1, ax2
+#     gc.collect()
 
 
 def plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recording."):
@@ -362,8 +493,8 @@ def plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recor
     ax.plot(temp_rec.time, temp_rec.resp, "k", label="Original", alpha=0.75)
 
     # Calculate the difference array once
-    diff = 10 * (temp_rec.resp - temp_rec_smooth.resp)
-    ax.plot(temp_rec.time, diff, "b", label="10*(original - smoothed)", alpha=0.6)
+    diff = temp_rec.resp - temp_rec_smooth.resp
+    ax.plot(temp_rec.time, diff, "b", label="original - smoothed", alpha=0.6)
 
     ax.plot(temp_rec_smooth.time, temp_rec_smooth.resp, "r", label="Smoothed", alpha=0.9)
 
@@ -754,7 +885,7 @@ class Fourier(loadRecord):
         plt.figure()
         plt.title(title)
         # Plot the optimized arrays
-        plt.plot(plot_x, plot_y, linewidth=0.05)
+        plt.plot(plot_x, plot_y, linewidth=0.5)
         plt.axhline()
         plt.yscale('log', base=np.e)
         two_decimal_lambda_formatter = FuncFormatter(lambda x, pos: f"{x:.3f}")
@@ -851,38 +982,71 @@ class Analyzer(Fourier):
     # @njit
     def find_pulses(self, direction: int = -1) -> None:
         """It gives the position of the start of the control pulses"""
+        # Check if either structure already contains data; if so, exit early
+        if len(self.pulses_peaks) > 0 and len(self.pul_attrs) > 0:
+            return
         der_test_resp = differentiate(self.cdac, self.t_delta)
         der_test_resp = prev_change(der_test_resp)
         threshold = der_test_resp * 0.0 + self.direction * 9 * np.std(der_test_resp)
         o_thresh = find_over_threshold(der_test_resp, threshold, direction)
         self.pulses_peaks, _ = find_peaks_and_boundaries(o_thresh, der_test_resp, direction)
-        self.pul_attrs = {evt_pos: {} for evt_pos, val in enumerate(self.pulses_peaks) if val}
+        self.pul_attrs = {evt_pos: {"t_o_p": self.time[evt_pos]} for evt_pos, val in enumerate(self.pulses_peaks) if val}
 
     @timing
     def del_pulses(self, del_length=0.75, target_val=2000.0):
-        peaks = self.pulses_peaks
         resp_copy = copy.deepcopy(self.resp)
         time_copy = copy.deepcopy(self.time)
-        del_range = vtp(del_length, self.t_delta)
-        for pos, val in enumerate(peaks):
-            if val:
-                resp_copy[pos:pos + del_range] = target_val
-        index = np.argwhere(resp_copy == target_val)
+
+        for evt_data in self.pul_attrs.values():
+            t_start = evt_data["t_o_p"]
+
+            # Resolve start and end indices dynamically in the current self.time array
+            start_idx = vtp_relative(t_start, self.time)
+            end_idx = vtp_relative(t_start + del_length, self.time)
+
+            if end_idx > start_idx:
+                resp_copy[start_idx:end_idx] = target_val
+
+        index = np.where(resp_copy == target_val)[0]
         self.time = np.delete(time_copy, index)
         self.resp = np.delete(resp_copy, index)
+    # def del_pulses(self, del_length=0.75, target_val=2000.0):
+    #     peaks = self.pulses_peaks
+    #     resp_copy = copy.deepcopy(self.resp)
+    #     time_copy = copy.deepcopy(self.time)
+    #     del_range = vtp(del_length, self.t_delta)
+    #     for pos, val in enumerate(peaks):
+    #         if val:
+    #             resp_copy[pos:pos + del_range] = target_val
+    #     index = np.argwhere(resp_copy == target_val)
+    #     self.time = np.delete(time_copy, index)
+    #     self.resp = np.delete(resp_copy, index)
 
     @timing
     def del_artifacts(self, artifacts_at, artifact_width, target_val=2000.0):
         resp_copy = copy.deepcopy(self.resp)
         time_copy = copy.deepcopy(self.time)
-        del_range = vtp(artifact_width, self.t_delta)
+
         for val in artifacts_at:
-            pos = vtp_relative(val, self.time)
-            print(f"Testing delete me after {val=} {pos=}")
-            resp_copy[pos:pos + del_range] = target_val
-        index = np.argwhere(resp_copy == target_val)
+            start_idx = vtp_relative(val, self.time)
+            end_idx = vtp_relative(val + artifact_width, self.time)
+
+            if end_idx > start_idx:
+                resp_copy[start_idx:end_idx] = target_val
+
+        index = np.where(resp_copy == target_val)[0]
         self.time = np.delete(time_copy, index)
         self.resp = np.delete(resp_copy, index)
+    # def del_artifacts(self, artifacts_at, artifact_width, target_val=2000.0):
+    #     resp_copy = copy.deepcopy(self.resp)
+    #     time_copy = copy.deepcopy(self.time)
+    #     del_range = vtp(artifact_width, self.t_delta)
+    #     for val in artifacts_at:
+    #         pos = vtp_relative(val, self.time)
+    #         resp_copy[pos:pos + del_range] = target_val
+    #     index = np.argwhere(resp_copy == target_val)
+    #     self.time = np.delete(time_copy, index)
+    #     self.resp = np.delete(resp_copy, index)
 
     @timing
     def get_pk_noise(self, time_frame=0.2, n_deviations=3, resp_increment=0.5, std_increment=10, sharpness=2):
@@ -1047,7 +1211,7 @@ class Analyzer(Fourier):
         for pos, value in enumerate(self.pulses_peaks):
             if value:
                 # Storing the time of the peak
-                self.pul_attrs[pos]["t_o_p"] = self.time[pos]
+                # self.pul_attrs[pos]["t_o_p"] = self.time[pos]
                 # Current pulse intensity
                 pulse_slice = slice(pos + beg_cap, pos + end_cap)
                 pulse_base_slice = slice(pos - 2 * beg_cap, pos - beg_cap)
@@ -1089,7 +1253,7 @@ class Analyzer(Fourier):
         for pos, value in enumerate(self.pulses_peaks):
             if value:
                 # Storing the time of the peak
-                self.pul_attrs[pos]["t_o_p"] = self.time[pos]
+                # self.pul_attrs[pos]["t_o_p"] = self.time[pos]
                 # Access resistance calculations
                 pulse_slice = slice(pos + end_acc, pos + beg_acc)
                 pulse_base_slice = slice(pos - beg_acc, pos - end_acc)
@@ -1441,9 +1605,8 @@ class EvtPro(Analyzer):
                 "fit_min"         : 0.0,  # Fit of i0
                 "fit_peak"        : None,  # Fit of pk0
                 "tau"             : None,  # Exp. decay fit constant, t0
-                "r_decay"         : None,  # Pearson's R of the fit
                 "mse_fit"         : None,  # Minimal standard error of the fit
-                "pearson_r"       : 0.01,  # Pearson's R of the fit (duplicate pointer)
+                "pearson_r"       : 0.01,  # Pearson's R of the fit
                 "fit_valid"       : False,  # Validity of the fit
                 "r_auc"           : None,  # Area under the curve of the response
                 "threshold_segm"  : None,  # threshold segment
@@ -1876,7 +2039,6 @@ class EvtPro(Analyzer):
     def fit_events(
             self, gaussian_window=0.002, fit_beg=0.00, fit_end=0.015, pearson_r_min=0.9, sharpness=2,
             tau_min=0.001, tau_max=0.01, normal_mse_fit_max=3.0, n_limit=100, std=1.0, min_length=0.0015,
-            amp_threshold=5.0
             ):
         """
         Fits the decay phase of events to an exponential curve.
@@ -1889,11 +2051,13 @@ class EvtPro(Analyzer):
         pos_fit_start = vtp(fit_beg, self.t_delta)
         pos_fit_end = vtp(fit_end, self.t_delta)
 
+        fig, ax = plt.subplots(figsize=(8, 5))  # testing... delete me after
+
         for evt_time, evt_data in self.events_attrs.items():
             evt_data.update(
                     {
                             "fit_min"  : np.nan, "fit_peak": np.nan, "tau": np.nan,
-                            "r_decay"  : np.nan, "mse_fit": np.nan, "pearson_r": np.nan,
+                            "mse_fit"  : np.nan, "pearson_r": np.nan,
                             "fit_valid": (False, False, False, False, False)
                             }
                     )
@@ -1921,25 +2085,7 @@ class EvtPro(Analyzer):
                 continue
 
             # =========================================================
-            # 2. AMPLITUDE-BASED TRUNCATION (Fixed Threshold)
-            # =========================================================
-            peak_val = s_resp_s[0]
-
-            # Adjust the threshold to the polarity of the recording
-            target_val = amp_threshold * self.direction
-
-            # Only attempt truncation if the peak is actually larger than the noise threshold
-            if abs(peak_val) > amp_threshold:
-                if self.direction == 1:
-                    crossings = np.where(s_resp_s[:local_ds_end] <= target_val)[0]
-                else:
-                    crossings = np.where(s_resp_s[:local_ds_end] >= target_val)[0]
-
-                if crossings.size > 0:
-                    local_ds_end = crossings[0]
-
-            # =========================================================
-            # 3. RESTRICT SLICE & FIT
+            # RESTRICT SLICE & FIT
             # =========================================================
             fit_region_restricted = slice(abs_fit_start, abs_fit_start + local_ds_end)
 
@@ -1951,7 +2097,12 @@ class EvtPro(Analyzer):
 
             fit_i_0, fit_pk0, fit_t0, pearson_r = exp_fit(r_s_short, t_short, self.direction)
             r_short = r_segm[fit_region_restricted]
-            mse_fit = mse(r_short, exp_decay(t_short, fit_i_0, fit_pk0, fit_t0))
+            fit_curve = exp_decay(t_short, fit_i_0, fit_pk0, fit_t0)  # testing... delete me after
+            mse_fit = mse(r_short, fit_curve)
+
+            # testing... delete me after
+            ax.plot(t_segm, r_segm, color="black", alpha=0.3)  # testing... delete me after
+            ax.plot(t_short, fit_curve, color="red", linewidth=1.5, alpha=0.8)  # testing... delete me after
 
             amplitude = evt_data.get("amplitude", 1.0)
             normal_mse_fit = mse_fit / amplitude if amplitude != 0 else float('inf')
@@ -1975,12 +2126,17 @@ class EvtPro(Analyzer):
                             "fit_min"  : fit_i_0,
                             "fit_peak" : fit_pk0,
                             "tau"      : fit_t0,
-                            "r_decay"  : pearson_r,
                             "mse_fit"  : mse_fit,
                             "pearson_r": pearson_r,
                             "fit_valid": fit_valid_tuple
                             }
                     )
+
+        # testing... delete me after
+        ax.set_title("testing... delete me after")  # testing... delete me after
+        ax.set_xlabel("Time (s)")  # testing... delete me after
+        ax.set_ylabel("Amplitude")  # testing... delete me after
+        plt.show()  # testing... delete me after
 
     @timing
     def inspect_fits(self, max_events=9, show_only_invalid=False, randomize=False):
@@ -2065,7 +2221,7 @@ class EvtPro(Analyzer):
             status = "VALID" if is_valid else "REJECTED"
             ax.set_title(
                     f"Event: {evt_time:.3f}s [{status} | {cond_str}]\n"
-                    f"tau: {fit_t0:.4f}, MSE: {evt_data.get('mse_fit', 0):.4f}, r: {evt_data.get('pearson_r', 0):.4f}",
+                    f"r:{evt_data.get('pearson_r', 0):.4f}, MSE:{evt_data.get('mse_fit', 0):.4f}, tau:{fit_t0:.4f}",
                     color=title_color, fontsize=10
                     )
 
@@ -2079,7 +2235,41 @@ class EvtPro(Analyzer):
             fig.delaxes(axes[i])
 
         plt.tight_layout()
-        plt.show()
+
+        # ---------------------------------------------------------
+        # DYNAMIC AUTO-SAVE BLOCK
+        # ---------------------------------------------------------
+        start_s = int(self.time[0])
+        end_s = int(self.time[-1])
+        events_num = len(events_to_plot)
+
+        try:
+            file_name = self.get_info('file', 'name').replace(".", "_")
+            file_parent_base = self.get_info('file', 'parent')
+
+            target_dir = os.path.join(file_parent_base, file_name) + os.sep
+            os.makedirs(target_dir, exist_ok=True)
+
+            out_name = f"{target_dir}{file_name}_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_inspect_fits_{events_num}.png"
+        except Exception as e:
+            print(f"Name resolution failed: {e}. Using fallback name.")
+            out_name = f"recording_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_inspect_fits_{events_num}.png"
+
+        fig.savefig(out_name, dpi=300, bbox_inches='tight')
+
+        # ---------------------------------------------------------
+        # ASYNC RAM CLEARING BLOCK
+        # ---------------------------------------------------------
+        def on_close(event):
+            event.canvas.figure.clear()
+            plt.close(event.canvas.figure)
+            import gc
+
+            gc.collect()
+
+        fig.canvas.mpl_connect('close_event', on_close)
+        plt.show(block=False)
+        fig.canvas.draw()
 
     @timing
     def _get_comm_intrv(self):
@@ -2090,7 +2280,6 @@ class EvtPro(Analyzer):
         if events_time_list:
             events_time = np.concatenate(events_time_list)
             self.common_time = np.unique(events_time)
-            print(f"testing delete me after {self.common_time=}")
         else:
             self.common_time = np.array([])
 
@@ -2269,13 +2458,10 @@ class EvtPro(Analyzer):
     @timing
     def get_auc(self, already_adjusted=True):
         b_amp = 0
-
         # RAM FIX: Iterate over a list of keys instead of deepcopying the whole dictionary
         initial_event_count = len(self.events_attrs)
-        plt.figure()  # delete me after
         for evt_pos in list(self.events_attrs.keys()):
             evt = self.events_attrs[evt_pos]  # SPEED FIX: Bind locally to avoid repeated lookups
-
             if not already_adjusted:
                 b_amp = evt["b_amp"]
             if evt["ap_threshold"] is not None:
@@ -2285,7 +2471,6 @@ class EvtPro(Analyzer):
             peak_pos = np.argmax(evt["p_segm"])
             from_peak_segm = evt["r_segm"][peak_pos:] - b_amp
             crossing_pos = crossing_point(from_peak_segm)
-
             if crossing_pos is None:
                 match self.direction:
                     case -1:
@@ -2295,23 +2480,11 @@ class EvtPro(Analyzer):
                     case _:
                         print("Wrong direction in AUC")
             end_pos = peak_pos + crossing_pos
-
             area = calculate_area(
                     evt["t_segm"][start_pos:end_pos],
                     evt["r_segm"][start_pos:end_pos] - b_amp
                     )
-
-            if area >= -0.04:
-                plt.plot(
-                        evt["t_segm"][start_pos:end_pos],
-                        evt["r_segm"][start_pos:end_pos] - b_amp
-                        )  # delete me after
-
             evt["r_auc"] = area
-
-        plt.title("Testing AUC, delete me after...")  # delete me after
-        plt.show(block=False)  # delete me after
-
         print(f" Accepted events: {len(self.events_attrs)}, Rejected: {initial_event_count - len(self.events_attrs)}")
 
     @timing
@@ -2355,6 +2528,7 @@ class EvtPro(Analyzer):
             min_auc: float = 0.0005,
             min_pearson_r: float = 0.9,
             min_ampl: float = -1.48,
+            use_fit: bool = True
             ):
         if not self.events_attrs:
             print("Screening cancelled: No raw putative events available to process.")
@@ -2413,10 +2587,11 @@ class EvtPro(Analyzer):
             # =====================================================================
             # 4. FIT QUALITY CONSTRAINTS
             # =====================================================================
-            if evt.get("pearson_r") is None or abs(evt["pearson_r"]) < abs(min_pearson_r):
-                msg = f" Event at {evt_time:12.4f}[s] rejected: {evt['pearson_r']=:.6f} ({min_pearson_r:.6f})."
-                self._reject_event(evt_time, "poor_pearson_r", msg)
-                continue
+            if use_fit:
+                if evt.get("pearson_r") is None or self.direction * evt["pearson_r"] < self.direction * min_pearson_r:
+                    msg = f" Event at {evt_time:12.4f}[s] rejected: {evt['pearson_r']=:.6f} ({min_pearson_r:.6f})."
+                    self._reject_event(evt_time, "poor_pearson_r", msg)
+                    continue
 
             # =====================================================================
             # 5. AMPLITUDE CONSTRAINTS
@@ -2578,18 +2753,62 @@ class EvtPro(Analyzer):
 
     @timing
     def show_all_events(
-            self, title: str = 'Recording with selected events', show_events: bool = True, adjust=True
+            self, title: str = 'Recording Events Comparison', show_events: bool = True, adjust: bool = True
             ) -> None:
-        fig, ax = plt.subplots(figsize=(5, 2.5))
+        # Stack subplots vertically and synchronize both X and Y axes
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 5), sharex=True, sharey=True)
         plt.rcParams.update({'font.size': 8})
-        ax.axhline(y=0.0, color="k", linestyle='--')
-        ax.plot(self.time, self.resp, "k", linewidth=1.5, alpha=0.1, label="Recording")
+
+        # =========================================================
+        # BOTTOM SUBPLOT: Event-Subtracted Recording
+        # =========================================================
+        ax2.axhline(y=0.0, color="k", linestyle='--')
+
+        resp_no_events = self.resp.copy()
+
+        for evt_pos, evt in self.events_attrs.items():
+            r_segm = evt["r_segm"]
+            p_segm = evt["p_segm"]
+
+            if len(r_segm) > 0:
+                idx_p = np.nonzero(p_segm)[0]
+
+                if idx_p.size > 0:
+                    # Resolve peak index in array and align slice start to the peak offset
+                    peak_idx = int(evt_pos) if isinstance(evt_pos, (int, np.integer)) else vtp_relative(
+                            evt_pos, self.time
+                            )
+                    start_idx = peak_idx - idx_p[0]
+                else:
+                    # Fallback if peak marker array is empty
+                    t_o_p = evt["t_o_p"]
+                    t_segm = evt["t_segm"]
+                    x_time = t_segm + t_o_p
+                    start_idx = vtp_relative(x_time[0], self.time)
+
+                end_idx = min(start_idx + len(r_segm), len(resp_no_events))
+                slice_len = end_idx - start_idx
+
+                if slice_len > 0 and start_idx >= 0:
+                    resp_no_events[start_idx:end_idx] -= r_segm[:slice_len]
+
+        ax2.plot(self.time, resp_no_events, "k", linewidth=1.2, label="Subtracted Trace")
+        ax2.set_title(f"Subtracted Recording ({len(self.events_attrs)} events removed)")
+        ax2.set_xlabel("Time (s)")
+        ax2.set_ylabel("Amplitude")
+        ax2.legend(loc='best', framealpha=0.7)
+
+        # =========================================================
+        # TOP SUBPLOT: Original Recording with Selected Events
+        # =========================================================
+        ax1.axhline(y=0.0, color="k", linestyle='--')
 
         if show_events:
             events_labeled = False
             for evt in self.events_attrs.values():
                 t_o_p = evt["t_o_p"]
                 t_segm = evt["t_segm"]
+                r_segm = evt["r_segm"]
                 p_segm = evt["p_segm"]
                 s_segm = evt["s_segm"]
                 z_segm = evt["z_segm"]
@@ -2599,39 +2818,42 @@ class EvtPro(Analyzer):
 
                 x_time = t_segm + t_o_p
                 if len(x_time) > 0:
-                    ax.hlines(
+                    ax1.hlines(
                             y=b_amp, xmin=x_time[0], xmax=x_time[-1], colors="k",
                             linewidth=1.5, alpha=0.6, label="Event Baseline" if not events_labeled else None
                             )
 
                 if not adjust:
                     amplitude -= b_amp
+                    ax1.plot(t_segm + t_o_p, r_segm, "k", label="Event" if not events_labeled else None)
+                else:
+                    ax1.plot(t_segm + t_o_p, b_amp + r_segm, "k", label="Event" if not events_labeled else None)
 
                 if threshold_segm is not None:
                     ap_threshold = evt["ap_threshold"]
                     idx_t = np.nonzero(threshold_segm)[0]
-                    ax.plot(
+                    ax1.plot(
                             (t_segm + t_o_p)[idx_t], (b_amp + threshold_segm * (ap_threshold - b_amp))[idx_t], "bo",
                             label="Threshold" if not events_labeled else None
                             )
 
                 idx_z = np.nonzero(z_segm)[0]
                 if idx_z.size > 0:
-                    ax.vlines(
+                    ax1.vlines(
                             x=(t_segm + t_o_p)[idx_z], ymin=b_amp, ymax=(b_amp + z_segm * amplitude / 4)[idx_z],
                             colors="g", label="Zero pass" if not events_labeled else None
                             )
 
                 idx_s = np.nonzero(s_segm)[0]
                 if idx_s.size > 0:
-                    ax.vlines(
+                    ax1.vlines(
                             x=(t_segm + t_o_p)[idx_s], ymin=b_amp, ymax=(b_amp + s_segm * amplitude / 2)[idx_s],
                             colors="b", label="Slope" if not events_labeled else None
                             )
 
                 idx_p = np.nonzero(p_segm)[0]
                 if idx_p.size > 0:
-                    ax.vlines(
+                    ax1.vlines(
                             x=(t_segm + t_o_p)[idx_p], ymin=b_amp, ymax=(b_amp + p_segm * amplitude)[idx_p],
                             colors="r", linewidth=1, label="Peak" if not events_labeled else None
                             )
@@ -2640,38 +2862,38 @@ class EvtPro(Analyzer):
         if self.ifreq_blocks.size:
             idx_blocks = np.nonzero(self.ifreq_blocks)[0][::10]
             if idx_blocks.size > 0:
-                ax.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
-                ax.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
+                ax1.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
+                ax1.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
 
             burst_freq_power = np.array(
                     [self.get_arr("burst_start_time", "burst"), self.get_arr("burst_freq_power", "burst")]
                     )
-            ax.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
+            ax1.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
 
-        ax.set_title(f"{self.sweep_index=} {title} {len(self.events_attrs)}.")
-        ax.legend(loc='best', framealpha=0.7)
+        ax1.set_title(f"{self.sweep_index=} {title} ({len(self.events_attrs)} events)")
+        ax1.set_ylabel("Amplitude")
+        ax1.legend(loc='best', framealpha=0.7)
+
+        plt.tight_layout()
 
         # ---------------------------------------------------------
-        # DYNAMIC AUTO-SAVE BLOCK (USING PROPER CLASS METHODS)
+        # DYNAMIC AUTO-SAVE BLOCK
         # ---------------------------------------------------------
         start_s = int(self.time[0])
         end_s = int(self.time[-1])
         events_num = len(self.events_attrs)
 
         try:
-            # Fetch directly from the instance exactly like get_names()
             file_name = self.get_info('file', 'name').replace(".", "_")
             file_parent_base = self.get_info('file', 'parent')
 
-            # Reconstruct the exact directory structure from setup_workspace()
             target_dir = os.path.join(file_parent_base, file_name) + os.sep
-            os.makedirs(target_dir, exist_ok=True)  # Failsafe in case it doesn't exist
+            os.makedirs(target_dir, exist_ok=True)
 
-            # Build the final string avoiding missing external functions like make_name
-            out_name = f"{target_dir}{file_name}_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_all_{events_num}.png"
+            out_name = f"{target_dir}{file_name}_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_comparison_{events_num}.png"
         except Exception as e:
             print(f"Name resolution failed: {e}. Using fallback name.")
-            out_name = f"recording_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_all_{events_num}.png"
+            out_name = f"recording_{self.sweep_index:0>2}_{start_s:0>4}_{end_s:0>4}_comparison_{events_num}.png"
 
         fig.savefig(out_name, dpi=300, bbox_inches='tight')
 

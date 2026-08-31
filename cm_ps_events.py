@@ -10,7 +10,7 @@ from lib_event_detection import EvtPro, make_instances, plot_rec, plot_smooth, s
     test_main
 from lib_gui import ConstDialog
 from lib_utility import (
-    auto_save, average_by, event_fr, make_name, make_sections, save_dict, save_plot,
+    auto_save, average_by, event_count, event_fr, make_name, make_sections, save_dict, save_plot,
     )
 
 const_file = ""
@@ -19,67 +19,67 @@ const: dict[str, Any] = dict(
         event_type="EPSC",  # AP, EPSP, EPSC, IPSP, IPSC or Calcium
         units="pA",  # Units of the responses
         direction=-1,  # Is the response going in the positive (+1) or negative direction (-1)?
-        evoked=False,  # different type of analysis depending on time locked responses
-        pair_pulse=False,  # activates pair pulse analysis. 2 pathways as default
         n_deviations_peak=3.0,  # threshold deviations for peaks
         n_deviations_slope=3.0,  # threshold deviations for derivative peaks
 
-        # search_width_peak=0.003,  # seconds, range to look for the maximum amplitude position +- search_width_peak/2
-        # kernel_length_peak=0.004,  # Used for peak detection
+        rec_smoothed_width=0.002,  # seconds # smooths recordings # smaller values result in noisier results
+        rec_sharpness=4,  # Acuity of the gaussian kernel
+
+        noise_smooth_frame=0.1,  # seconds, width of the average
+        noise_sharpness=2,  # Acuity of the gaussian kernel
+        noise_smooth_frame_der=0.1,  # seconds, width of the average
+        noise_sharpness_der=2,  # Acuity of the gaussian kernel
+
+        resp_increment=0.5,  # Minimum interval between two consecutive events necessary to calculate STD
+        std_increment=10.0,  # Interval to select the minimum STD
+
+        adjust=True,  # Adjust the amplitude of the events with respect to their baseline
         slope_peak_time=0.0075,  # How far the slope and peak must be to be detected. For fast events
         peak_to_peak=0.002,  # Minimal Interval between two consecutive peaks
         shift_time=0.001,  # seconds to find a pulse's artifact
         zero_peak_to_amp_peak=0.005,  # seconds between the amplitude peak and the derivative calculated peak
         max_rise_time=0.00263,  # max time delta allowed for the events
+        min_amplitude=0.0001,  # threshold to accept an event
+        min_auc=-0.02,  # Minimal area under the curve accepted for the events
+        max_slope=-1000000,  # Use this value for slope based selection, begin with 20k then reduce until is right
+
 
         baseline_time=0.002,  # seconds
         peak_radius=0.0002,  # seconds
-        min_amplitude=0.0001,  # threshold to accept an event
-        adjust=True,  # Adjust the amplitude of the events with respect to their baseline
-        max_slope=-1000000,  # Use this value for slope based selection, begin with 20k then reduce until is right
         t_bef=0.015,  # seconds, It must be at least the size of zero_pass_frame
         t_aft=0.03,  # seconds
         alignment='p',  # Type of alignment: 'p' peak, 'z' zero value slope, and 's' max rising slope
         peak_type='p',  # Type of peak assessment: 'p' around the peak, 'z' around zero-value slope
+        plot_increment=60,  # Seconds to make an average
+        bins=25,  # Number of bins for the histograms
+        show_everything=False,
+        plot=True,  # Plot and save, if False the function just saves the analysis
+        plot_test=True,  # Plot the thresholds and the identified peaks
+        change_config=True,  # If the configuration is set, don't ask to change it again
 
-        noise_smooth_frame=0.1,  # seconds, width of the average
-        resp_increment=0.5,
-        std_increment=10.0,
-        noise_sharpness=2,  # Acuity of the gaussian kernel
-
-        smoothed_width=0.002,  # seconds # smooths recordings # smaller values result in noisier results
-        rec_sharpness=4,  # Acuity of the gaussian kernel
-
+        use_fit=True,
         gaussian_window=0.002,  # time interval for the gaussian kernel
         fit_sharpness=2,  # Acuity of the gaussian kernel
         fit_beg=0.0,
         fit_end=0.015,
-        pearson_r_min=0.75,  # Minimum Pearson's coefficient required for the fit
+        pearson_r_min=-0.75,  # Minimum Pearson's coefficient required for the fit
         fit_tau_min=0.0015,  # Decay constant, in seconds
         fit_tau_max=0.01,  # Decay constant, in seconds
         normal_mse_fit_max=3.0,  # Maximum MSE normalized by the amplitude of the event
         n_limit=1.0,  # Number of STD to accept the asymptotic limit of the exp decay
 
-        min_auc=-0.02,  # Minimal area under the curve accepted for the events
-
-        plot_increment=60,  # Seconds to make an average
-        bins=25,  # Number of bins for the histograms
-
-        use_fit=True,
         use_psnsfa=False,
         psnsfa_fit_start=0.0,
         psnsfa_fit_end=0.012,
         psnsfa_n_limit=1.0,
-        show_everything=False,
-        plot=True,  # Plot and save, if False the function just saves the analysis
-        plot_test=True,  # Plot the thresholds and the identified peaks
-        change_config=True,  # If the configuration is set, don't ask to change it again
-        factor=10,
+        # factor=10,
         psnsfa_x0=-10,
         psnsfa_x1=1,
         psnsfa_y0=1,
         psnsfa_y1=10,
 
+        evoked=False,  # different type of analysis depending on time locked responses
+        pair_pulse=False,  # activates pair pulse analysis. 2 pathways as default
         pp1_r1=0.75,
         pp1_r2=0.83,
         pp1_artifact=0.002,  # Artifact delta. The time that the stimulation artifact lasts
@@ -87,11 +87,13 @@ const: dict[str, Any] = dict(
         pp2_r2=1.83,
         pp2_artifact=0.002,  # Artifact delta. The time that the stimulation artifact lasts
         search_resp=0.01,  # max interval to search the response. search_resp < pp1_r2 - pp1_r1
+
         burst_analysis=False,  # Activate burst_analysis?
         kernel_length=1.0,  # Length in seconds
         min_num_ap=2,  # Minimum number of APs to consider an event a real burst
         corr_start=300,  # correlation template start
         corr_end=600,  # correlation template end
+
         reduce=True,
         background=False,  # Is there a background to subtract? can be a value or an array.
         )
@@ -100,9 +102,9 @@ const: dict[str, Any] = dict(
 def run_test_block(ori_inst, run_const, start, end):
     print("Running analysis block...")
     temp_rec, temp_smooth, temp_der, temp_sder = make_instances(ori_inst, run_const["direction"], start, end, 4)
-    if run_const["smoothed_width"]:
+    if run_const["rec_smoothed_width"]:
         temp_smooth.get_smooth(
-                run_const["smoothed_width"],
+                run_const["rec_smoothed_width"],
                 run_const["rec_sharpness"]
                 )
         if run_const["plot_test"]:
@@ -145,25 +147,67 @@ def run_test_block(ori_inst, run_const, start, end):
     # ---------------------------------------------------------
     ax2.plot(temp_rec.time, temp_rec.derivative, 'r', label="temp_rec.derivative", alpha=0.5, linewidth=2)
     ax2.plot(temp_sder.time, temp_sder.resp, 'k', label="temp_sder.resp", linewidth=2)
-    end = 0.05
-    frame_increments = np.linspace(run_const["noise_smooth_frame"], end, 2)
+    start_f = 0.001
+    frame_increments = np.linspace(start_f, run_const["noise_smooth_frame"], 3)
     alpha_var_smooth = 1.0
     alpha_var_raw = 0.5
     decrement_smooth = alpha_var_smooth / len(frame_increments)
     decrement_raw = alpha_var_raw / len(frame_increments)
     diff_sresp_g_conv_sresp_array = []
     diff_sderv_g_conv_sderv_array = []
+    # Peak noise assessment is performed once for derivatives
+    sder_kr_sd = temp_sder.get_pk_noise(
+            run_const["noise_smooth_frame_der"],
+            run_const["n_deviations_slope"],
+            run_const["resp_increment"],
+            run_const["std_increment"],
+            run_const["noise_sharpness_der"]
+            )
+    der_kr_sd = temp_der.get_pk_noise(
+            run_const["noise_smooth_frame_der"],
+            run_const["n_deviations_slope"],
+            run_const["resp_increment"],
+            run_const["std_increment"],
+            run_const["noise_sharpness_der"]
+            )
+    print(
+            f"\n{sder_kr_sd=} "
+            f"\n{der_kr_sd=}"
+            )
+    diff_derv_g_conv_derv = temp_der.resp - temp_der.adaptive_sresp
+    diff_sderv_g_conv_sderv = temp_sder.resp - temp_sder.adaptive_sresp
+    diff_sderv_g_conv_sderv_array.append(diff_sderv_g_conv_sderv)  # accumulator for sderv
+
+    # ---------------------------------------------------------
+    # ROW 1, COLUMN 2: Derivative
+    # ---------------------------------------------------------
+    ax2.plot(
+            temp_sder.time,
+            temp_sder.adaptive_sresp,
+            'b', alpha=alpha_var_smooth,
+            label=f"Frame={run_const["noise_smooth_frame_der"]:3.3f} SD={sder_kr_sd:3.5f}"
+            )
+    ax2.legend(loc="lower right")
+    ax2.set_title("Derivative (temp_sder.resp)")
+    # ---------------------------------------------------------
+    # ROW 2, COLUMN 2: Derivative Difference
+    # ---------------------------------------------------------
+    ax4.plot(temp_der.time, diff_derv_g_conv_derv, 'r', alpha=alpha_var_raw)
+    ax4.plot(
+            temp_sder.time,
+            diff_sderv_g_conv_sderv,
+            'k', alpha=alpha_var_smooth,
+            label=f"Frame={run_const["noise_smooth_frame_der"]:3.3f} SD={sder_kr_sd:3.5f}"
+            )
+    ax4.plot(temp_sder.time, temp_sder.direction * temp_sder.interpolated_sd, 'g', alpha=alpha_var_smooth)
+    ax4.legend(loc="lower right")
+    ax4.set_title("temp_sder.resp - temp_sder.adaptive_sresp")
+    ax4.set_xlabel("Time")
+
     for noise_smooth_frame in frame_increments:
         smooth_kr_sd = temp_smooth.get_pk_noise(
                 noise_smooth_frame,
                 run_const["n_deviations_peak"],
-                run_const["resp_increment"],
-                run_const["std_increment"],
-                run_const["noise_sharpness"]
-                )
-        sder_kr_sd = temp_sder.get_pk_noise(
-                noise_smooth_frame,
-                run_const["n_deviations_slope"],
                 run_const["resp_increment"],
                 run_const["std_increment"],
                 run_const["noise_sharpness"]
@@ -175,29 +219,18 @@ def run_test_block(ori_inst, run_const, start, end):
                 run_const["std_increment"],
                 run_const["noise_sharpness"]
                 )
-        der_kr_sd = temp_der.get_pk_noise(
-                noise_smooth_frame,
-                run_const["n_deviations_slope"],
-                run_const["resp_increment"],
-                run_const["std_increment"],
-                run_const["noise_sharpness"]
-                )
         print(f'{noise_smooth_frame=} {run_const["noise_sharpness"]=}')
         # ---------------------------------------------------------
         # PRE-CALCULATE DIFFERENCES
         # ---------------------------------------------------------
         print(
-            f"{smooth_kr_sd=} "
-            f"\n{sder_kr_sd=} "
-            f"\n{rec_kr_sd=} "
-            f"\n{der_kr_sd=}"
-            )
+                f"{smooth_kr_sd=} "
+                f"\n{rec_kr_sd=} "
+                )
         diff_resp_g_conv_resp = temp_rec.resp - temp_rec.adaptive_sresp
         diff_sresp_g_conv_sresp = temp_smooth.resp - temp_smooth.adaptive_sresp
         diff_sresp_g_conv_sresp_array.append(diff_sresp_g_conv_sresp)  # accumulator for sresp
-        diff_derv_g_conv_derv = temp_der.resp - temp_der.adaptive_sresp
-        diff_sderv_g_conv_sderv = temp_sder.resp - temp_sder.adaptive_sresp
-        diff_sderv_g_conv_sderv_array.append(diff_sderv_g_conv_sderv)  # accumulator for sderv
+
         # ---------------------------------------------------------
         # ROW 1, COLUMN 1: Response
         # ---------------------------------------------------------
@@ -210,68 +243,44 @@ def run_test_block(ori_inst, run_const, start, end):
         ax1.legend(loc="lower right")
         ax1.set_title("Response (temp_smooth.resp)")
         # ---------------------------------------------------------
-        # ROW 1, COLUMN 2: Derivative
-        # ---------------------------------------------------------
-        ax2.plot(
-                temp_sder.time,
-                temp_sder.adaptive_sresp,
-                'b', alpha=alpha_var_smooth,
-                label=f"Frame={noise_smooth_frame:3.3f} SD={sder_kr_sd:3.5f}"
-            )
-        ax2.legend(loc="lower right")
-        ax2.set_title("Derivative (temp_sder.resp)")
-        # ---------------------------------------------------------
         # ROW 2, COLUMN 1: Response Difference
         # ---------------------------------------------------------
         ax3.plot(temp_rec.time, diff_resp_g_conv_resp, 'r', alpha=alpha_var_raw)
         ax3.plot(
                 temp_smooth.time,
                 diff_sresp_g_conv_sresp,
-                'k', alpha=alpha_var_smooth, label=f"Frame={noise_smooth_frame:3.3f} SD={smooth_kr_sd:3.5f}"
+                'k', alpha=alpha_var_smooth,
+                label=f"Frame={noise_smooth_frame:3.3f} SD={smooth_kr_sd:3.5f}"
                 )
         ax3.plot(temp_smooth.time, temp_smooth.direction * temp_smooth.interpolated_sd, 'g', alpha=alpha_var_smooth)
-        # ---------------------------------------------------------
-        # ROW 2, COLUMN 2: Derivative Difference
-        # ---------------------------------------------------------
-        ax4.plot(temp_der.time, diff_derv_g_conv_derv, 'r', alpha=alpha_var_raw)
-        ax4.plot(
-                temp_sder.time,
-                diff_sderv_g_conv_sderv,
-                'k', alpha=alpha_var_smooth, label=f"Frame={noise_smooth_frame:3.3f} SD={sder_kr_sd:3.5f}"
-                )
-        ax4.plot(temp_sder.time, temp_sder.direction * temp_sder.interpolated_sd, 'g', alpha=alpha_var_smooth)
-        ax4.legend(loc="lower right")
-        ax4.set_title("temp_sder.resp - temp_sder.adaptive_sresp")
-        ax4.set_xlabel("Time")
 
         alpha_var_smooth -= decrement_smooth
         alpha_var_raw -= decrement_raw
 
-
-    print(f"Testing COV... delete me after...")
+    print(f"Testing better detection strategy... delete me after...")
     # ---------------------------------------------------------
     # ROW 2, COLUMN 1: Response Difference
     # ---------------------------------------------------------
-    diff_sresp_g_conv_sresp_array = np.array(diff_sresp_g_conv_sresp_array)
-    diff_sresp_g_conv_sresp_std = np.std(diff_sresp_g_conv_sresp_array, axis=0)
-    diff_sresp_g_conv_sresp_avg = np.average(diff_sresp_g_conv_sresp_array, axis=0)
-    diff_sresp_g_conv_sresp_new = diff_sresp_g_conv_sresp_std*diff_sresp_g_conv_sresp_avg
-    ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_std, "k:", label="diff_sresp_g_conv_sresp_std")
-    ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_avg, "g:", label="diff_sresp_g_conv_sresp_avg")
-    ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_new, "b", linewidth=2, label="diff_sresp_g_conv_sresp_new")
+    # diff_sresp_g_conv_sresp_array = np.array(diff_sresp_g_conv_sresp_array)
+    # diff_sresp_g_conv_sresp_std = np.std(diff_sresp_g_conv_sresp_array, axis=0)
+    # diff_sresp_g_conv_sresp_avg = np.average(diff_sresp_g_conv_sresp_array, axis=0)
+    # diff_sresp_g_conv_sresp_new = diff_sresp_g_conv_sresp_std*diff_sresp_g_conv_sresp_avg
+    # ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_std, "k:", label="diff_sresp_g_conv_sresp_std")
+    # ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_avg, "g:", label="diff_sresp_g_conv_sresp_avg")
+    # ax3.plot(temp_smooth.time, diff_sresp_g_conv_sresp_new, "b", linewidth=2, label="diff_sresp_g_conv_sresp_new")
     ax3.legend(loc="lower right")
     ax3.set_title("temp_smooth.resp - temp_smooth.adaptive_sresp")
     ax3.set_xlabel("Time")
     # ---------------------------------------------------------
     # ROW 2, COLUMN 2: Derivative Difference
     # ---------------------------------------------------------
-    diff_sderv_g_conv_sderv_array = np.array(diff_sderv_g_conv_sderv_array)
-    diff_sderv_g_conv_sderv_std = np.std(diff_sderv_g_conv_sderv_array, axis=0)
-    diff_sderv_g_conv_sderv_avg = np.average(diff_sderv_g_conv_sderv_array, axis=0)
-    diff_sderv_g_conv_sderv_new = diff_sderv_g_conv_sderv_std*diff_sderv_g_conv_sderv_avg
-    ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_std, "k:", label="diff_sderv_g_conv_sderv_std")
-    ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_avg, "g:", label="diff_sderv_g_conv_sderv_avg")
-    ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_new, "b", linewidth=2, label="diff_sderv_g_conv_sderv_new")
+    # diff_sderv_g_conv_sderv_array = np.array(diff_sderv_g_conv_sderv_array)
+    # diff_sderv_g_conv_sderv_std = np.std(diff_sderv_g_conv_sderv_array, axis=0)
+    # diff_sderv_g_conv_sderv_avg = np.average(diff_sderv_g_conv_sderv_array, axis=0)
+    # diff_sderv_g_conv_sderv_new = diff_sderv_g_conv_sderv_std*diff_sderv_g_conv_sderv_avg
+    # ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_std, "k:", label="diff_sderv_g_conv_sderv_std")
+    # ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_avg, "g:", label="diff_sderv_g_conv_sderv_avg")
+    # ax4.plot(temp_sder.time, diff_sderv_g_conv_sderv_new, "b", linewidth=2, label="diff_sderv_g_conv_sderv_new")
     ax4.legend(loc="lower right")
     ax4.set_title("temp_sder.resp - temp_sder.adaptive_sresp")
     ax4.set_xlabel("Time")
@@ -297,7 +306,7 @@ def run_test_block(ori_inst, run_const, start, end):
     plt.close('all')
 
     # Delete heavy local arrays and objects to force memory deallocation immediately
-    del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv
+    del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv  # !!!!
     del fig, axs, ax1, ax2, ax3, ax4
     gc.collect()
 
@@ -312,12 +321,13 @@ def run_test_block(ori_inst, run_const, start, end):
     temp_rec.peak_boundaries = temp_smooth.peak_boundaries
     temp_rec.peak_noise = temp_smooth.peak_noise
 
-    # temp_der.peak_noise = copy.deepcopy(temp_der.interpolated_sd ** 2)
-    diff_sderv_g_conv_sderv = temp_sder.resp - temp_sder.adaptive_sresp
-    temp_sder.resp = np.abs(diff_sderv_g_conv_sderv) * diff_sderv_g_conv_sderv  # Derivative convolution
+    # temp_sder.peak_noise = copy.deepcopy(temp_sder.interpolated_sd ** 2)
+    # diff_sderv_g_conv_sderv = temp_sder.resp - temp_sder.adaptive_sresp
+    # temp_sder.resp = np.abs(diff_sderv_g_conv_sderv) * diff_sderv_g_conv_sderv  # Derivative convolution
     temp_sder.get_peaks(run_const["shift_time"])  # Get the peaks of the derivative convolution
     temp_sder.get_z_pass()
 
+    temp_rec.derivative = temp_smooth.derivative
     temp_rec.der_peak_noise = temp_sder.peak_noise
     temp_rec.der_peaks = temp_sder.peaks
     temp_rec.zero_pass = temp_sder.zero_pass
@@ -410,7 +420,8 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
                 const["slope_peak_time"],
                 const["min_auc"],
                 const["pearson_r_min"],
-                const["min_amplitude"]
+                const["min_amplitude"],
+                const["use_fit"]
                 )
 
         # 3. Visualize the remaining events
@@ -461,6 +472,7 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
         title = f"From {start:0>4} to {end:0>4}. Detected {const['event_type']}: "
         rec.show_all_events(title, True, const["adjust"])
         rec.show_events_aligned(title)
+        # rec.show_no_events()
 
     return rec
 
@@ -473,6 +485,10 @@ def build_analysis_dicts(build_const: dict) -> tuple[dict, dict, dict, dict, dic
         """Helper to generate a fresh event dictionary with independent zero_arrs."""
 
         d = {
+                "Count": {
+                        "value"   : zero_arr.copy(), "parameter": "amplitude", "units": "#",
+                        "function": event_count
+                        },
                 "Amplitude"           : {
                         "value"   : zero_arr.copy(), "parameter": "amplitude", "units": build_const["units"],
                         "function": average_by
@@ -510,7 +526,7 @@ def build_analysis_dicts(build_const: dict) -> tuple[dict, dict, dict, dict, dic
                                     "value": zero_arr.copy(), "parameter": "tau", "units": "s", "function": average_by
                                     },
                             "R of decay": {
-                                    "value"   : zero_arr.copy(), "parameter": "r_decay", "units": "",
+                                    "value"   : zero_arr.copy(), "parameter": "pearson_r", "units": "",
                                     "function": average_by
                                     },
                             "MSE fit"   : {
@@ -611,13 +627,6 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
     # ---------------------------------------------------------
     common_name += [const["event_type"], const["alignment"]]
 
-    # "t_bef" must be at least the size of "zero_pass_frame"
-    if const["zero_pass_frame"] > const["t_bef"]:
-        print(f"Changing {const['t_bef'] = }, because is smaller than {const['zero_pass_frame'] = }")
-        const["t_bef"] = const["zero_pass_frame"]
-    else:
-        print(f"{const['t_bef'] = } is at least the size of {const['zero_pass_frame'] = }")
-
     if ori_inst.mode == "sweeps":
         sweep_count = ori_inst.sweeps
         if const["background"]:
@@ -626,9 +635,8 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
         sweep_count = [1]
 
     for sweep_number, _ in enumerate(sweep_count):
-        evts_analyses, burst_evt_analyses, isol_evt_analyses, bursts_analyses, section_analyses = build_analysis_dicts(
-                const
-                )
+        # TODO if I update the const later (inside body) build_analysis_dicts maintain the default version (problem)
+        evts_anlss, burst_evt_anlss, isol_evt_anlss, bursts_anlss, section_anlss = build_analysis_dicts(const)
 
         for section in make_sections(start, total, interval):
             start_s, end_s = section
@@ -653,7 +661,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                 auto_save(events, out_name_evn)  # Events saved for every section
 
                 # Specific for events
-                for components in evts_analyses.values():  # appending consecutive the values every iteration
+                for components in evts_anlss.values():  # appending consecutive the values every iteration
                     components["value"] = np.append(
                             components["value"],
                             np.stack((times_of_peaks, rec.get_arr(components["parameter"])), axis=0).T,
@@ -664,7 +672,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                     # ---- NEW: Append Burst APs ----
                     times_of_burst_evts = rec.get_arr("t_o_p", "burst_evt")
                     if times_of_burst_evts is not None and times_of_burst_evts.size > 0:
-                        for components in burst_evt_analyses.values():
+                        for components in burst_evt_anlss.values():
                             components["value"] = np.append(
                                     components["value"],
                                     np.stack(
@@ -677,7 +685,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                     # ---- NEW: Append Isolated APs ----
                     times_of_isolated_evts = rec.get_arr("t_o_p", "isolated_evt")
                     if times_of_isolated_evts is not None and times_of_isolated_evts.size > 0:
-                        for components in isol_evt_analyses.values():
+                        for components in isol_evt_anlss.values():
                             components["value"] = np.append(
                                     components["value"],
                                     np.stack(
@@ -688,7 +696,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                                     )
 
                     # Specific for bursts
-                    for components in bursts_analyses.values():  # appending consecutive the values every iteration
+                    for components in bursts_anlss.values():  # appending consecutive the values every iteration
                         components["value"] = np.append(
                                 components["value"],
                                 np.stack(
@@ -702,7 +710,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                                 )
 
                 # Specific for sections
-                for components in section_analyses.values():
+                for components in section_anlss.values():
                     components["value"] = np.append(
                             components["value"],
                             np.array(
@@ -727,7 +735,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
         const["bins"] = int(const["bins"])  # Making sure that "bins" is of integer type
 
         # Saving & plotting for events
-        for analysis_type, components in evts_analyses.items():
+        for analysis_type, components in evts_anlss.items():
             components["value"] = components["value"][1:].T  # removing zero_arr
             save_plot(
                     components["value"],
@@ -746,7 +754,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
         if const["burst_analysis"]:
 
             # ---- NEW: Save/Plot Burst APs ----
-            for analysis_type, components in burst_evt_analyses.items():
+            for analysis_type, components in burst_evt_anlss.items():
                 if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
                     components["value"] = components["value"][1:].T
                     save_plot(
@@ -761,7 +769,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                             )
 
             # ---- NEW: Save/Plot Isolated APs ----
-            for analysis_type, components in isol_evt_analyses.items():
+            for analysis_type, components in isol_evt_anlss.items():
                 if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
                     components["value"] = components["value"][1:].T
                     save_plot(
@@ -776,7 +784,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                             )
 
             # Saving & plotting for bursts
-            for analysis_type, components in bursts_analyses.items():
+            for analysis_type, components in bursts_anlss.items():
                 components["value"] = components["value"][1:].T  # removing zero_arr
                 save_plot(
                         components["value"],
@@ -793,7 +801,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                         )
 
         # Saving & plotting for sections
-        for analysis_type, components in section_analyses.items():
+        for analysis_type, components in section_anlss.items():
             components["value"] = components["value"][1:].T  # removing zero_arr
             save_plot(
                     components["value"],

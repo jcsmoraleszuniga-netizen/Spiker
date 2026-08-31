@@ -7,10 +7,6 @@ t_delta = 0.0001  # Sampling frequency is 10kHz
 sampling_f = int(1 / t_delta)
 
 
-def compare_function():
-    ...
-
-
 def psc(time_delta=0.0001, rise_time=0.002, amplitude=-15.0, exp_dec_params=(0.0, -0.01), min_amplitude=0.01):
     # Dynamically calculate the slope required to reach the target amplitude in the fixed rise_time
     rise_slope = amplitude / rise_time
