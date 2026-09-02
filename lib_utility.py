@@ -72,10 +72,17 @@ def ptv(value: int | np.integer, value_increment: float | np.floating) -> float 
 
 # @timing
 @njit
-def exp_decay(
-        t: NDArray[np.floating], i0: np.floating | float, pk0: np.floating | float, t0: np.floating | float
-        ) -> NDArray[np.floating]:
-    return i0 + pk0 * exp(t / t0)
+def exp_decay(t: np.ndarray, i0: float, pk0: float, t0: float) -> np.ndarray:
+    """
+    Evaluates mono-exponential decay over array t starting from onset t[0].
+    I(t) = i0 + pk0 * exp(-(t - t[0]) / t0)
+    """
+    return i0 + pk0 * np.exp(-(t - t[0]) / t0)
+# @njit
+# def exp_decay(
+#         t: NDArray[np.floating], i0: np.floating | float, pk0: np.floating | float, t0: np.floating | float
+#         ) -> NDArray[np.floating]:
+#     return i0 + pk0 * exp(t / t0)
 
 
 # @timing
@@ -743,7 +750,7 @@ def split_position(arr: np.ndarray, direction: int) -> signedinteger[_32Bit | _6
 def remove_shift(arr_base, arr_resp):
     """Remove shift of the response over time."""
     # pr_lin = opt_linear(arr_base[0], arr_base[1])
-    slope, intercept, r_value, p_value, std_err, intercept_stderr = lin_fit(arr_base[1], arr_base[0])
+    slope, intercept, pearson_r, p_value, std_err, intercept_stderr = lin_fit(arr_base[1], arr_base[0])
     # arr_resp[1] -= linear(arr_resp[0], *pr_lin[0])
     arr_resp[1] -= linear(arr_resp[0], slope, intercept)
     return arr_resp
@@ -819,19 +826,40 @@ def correct_bound(value):
 @njit
 def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
     """Transforms an exponential decay curve to a linear curve.
-    The exponential form has to be: I(t) = pk0 * exp(-t / t0)
+    The exponential form is: I(t) = pk0 * exp(-t / t0)
     The linear form is: Ln(I(t)) = Ln(pk0) - t/t0"""
-    if len(arr):
-        match direction:
-            case 1:  # positive going
-                y = arr
-            case -1:  # negative going
-                y = -arr
-            case _:
-                raise ValueError("Wrong direction")
-        return np.log(y + 1.0)
+    if len(arr) < 2:
+        raise ValueError("Array must contain at least 2 points.")
+
+    if direction == 1:
+        y = arr
+    elif direction == -1:
+        y = -arr
     else:
-        raise ValueError("Array is empty")
+        raise ValueError("Direction must be 1 or -1.")
+
+    # CONTROL STATEMENT: Guard against non-positive, zero, or NaN/Inf values
+    if np.any(y <= 0.0) or np.any(np.isnan(y)) or np.any(np.isinf(y)):
+        raise ValueError("Array contains non-positive, zero, or non-finite values incompatible with log conversion.")
+
+    # Mathematically exact log transformation (no distortion offset needed)
+    return np.log(y)
+# @njit
+# def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
+#     """Transforms an exponential decay curve to a linear curve.
+#     The exponential form has to be: I(t) = pk0 * exp(-t / t0)
+#     The linear form is: Ln(I(t)) = Ln(pk0) - t/t0"""
+#     if len(arr):
+#         match direction:
+#             case 1:  # positive going
+#                 y = arr
+#             case -1:  # negative going
+#                 y = -arr
+#             case _:
+#                 raise ValueError("Wrong direction")
+#         return np.log(y + 1.0)
+#     else:
+#         raise ValueError("Array is empty")
 
 
 # @timing
@@ -841,11 +869,15 @@ def lin_fit(y_var, x_var):
     Fits data to a linear relation: y = intercept + slope * x
     Manual implementation for Numba compatibility.
 
-    Returns: slope, intercept, r_value, p_value, std_err, intercept_stderr
+    Returns: slope, intercept, pearson_r, p_value, std_err, intercept_stderr
     (Note: p_value and stderrs are returned as 0.0)
     """
     n = len(x_var)
-    if n < 2:
+    if n < 2 or len(y_var) != n:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # Check for NaNs in input vectors
+    if np.any(np.isnan(x_var)) or np.any(np.isnan(y_var)):
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     # Calculate sums required for linear regression
@@ -857,7 +889,7 @@ def lin_fit(y_var, x_var):
 
     denom = n * S_xx - S_x ** 2
 
-    if denom == 0:
+    if denom <= 0.0 or np.isnan(denom):
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     # Calculate Slope and Intercept
@@ -866,30 +898,60 @@ def lin_fit(y_var, x_var):
 
     # Calculate R value (Pearson coefficient)
     r_num = n * S_xy - S_x * S_y
-    r_den = np.sqrt((n * S_xx - S_x ** 2) * (n * S_yy - S_y ** 2))
+    # Ensure square root argument is non-negative before root extraction
+    y_term = max(0.0, n * S_yy - S_y ** 2)
+    x_term = max(0.0, denom)
+    r_den = np.sqrt(x_term * y_term)
 
-    if r_den == 0:
-        r_value = 0.0
+    # Check for NaN or zero denominator
+    if r_den == 0 or np.isnan(r_den):
+        pearson_r = 0.0
     else:
-        r_value = r_num / r_den
+        pearson_r = r_num / r_den
 
     # P-value and Standard Errors are difficult to compute in nopython mode
     # (requires t-distribution CDF). We return 0.0 to satisfy the unpacking
     # signature expected by 'exp_fit'.
-    return slope, intercept, r_value, 0.0, 0.0, 0.0
+    return slope, intercept, pearson_r, 0.0, 0.0, 0.0
 
 
 # @timing
 @njit
-def exp_fit(response, time, direction):
-    """Fits data to an exponential decay.
-    I(t) = i0 + pk0 * exp(-t / t0), returns i0, pk0, t0 and pearson_r"""
+def exp_fit(response: np.ndarray, time: np.ndarray, direction: int):
+    """Fits data to an exponential decay: I(t) = pk0 * exp(-t / t0).
+    Returns fit_i_0, fit_pk0, fit_t0, pearson_r"""
+    if len(response) < 2 or len(time) < 2:
+        return 0.0, np.nan, np.nan, np.nan
+
+    # CONTROL STATEMENT: Check input polarity & invalid values upfront
+    if direction == 1 and np.any(response <= 0.0):
+        return 0.0, np.nan, np.nan, np.nan
+    elif direction == -1 and np.any(response >= 0.0):
+        return 0.0, np.nan, np.nan, np.nan
+    elif direction != 1 and direction != -1:
+        return 0.0, np.nan, np.nan, np.nan
+
+    if np.any(np.isnan(response)) or np.any(np.isnan(time)):
+        return 0.0, np.nan, np.nan, np.nan
+
+    # Shift time vector to relative onset (t_0 = 0) to prevent floating-point precision loss
+    t_rel = time - time[0]
+
+    # Convert to linear space safely
     lin_resp = exp_to_lin(response, direction)
-    inv_t0, lin_pk0, r_value, p_value, std_err, intercept_stderr = lin_fit(lin_resp, time)
+
+    # Perform linear fit: Ln(I(t)) = Ln(pk0) - (1/t0) * t_rel
+    slope, lin_pk0, pearson_r, _, _, _ = lin_fit(lin_resp, t_rel)
+
+    # A valid decay curve must have a negative slope in log space (slope = -1/tau)
+    if slope >= 0.0 or np.isnan(slope) or np.isnan(lin_pk0):
+        return 0.0, np.nan, np.nan, np.nan
+
     fit_pk0 = np.exp(lin_pk0) * direction
-    fit_t0 = 1.0 / inv_t0
-    fit_i_0 = 0  # Maintained just for compatibility
-    return fit_i_0, fit_pk0, fit_t0, r_value  # i0, pk0, t0, r
+    fit_t0 = -1.0 / slope
+    fit_i_0 = 0.0
+
+    return fit_i_0, fit_pk0, fit_t0, pearson_r
 
 
 # @timing

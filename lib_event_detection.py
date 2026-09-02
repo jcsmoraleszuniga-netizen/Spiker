@@ -1,5 +1,6 @@
 import copy
 import gc
+import io
 import os
 import random
 import warnings
@@ -14,7 +15,8 @@ from scipy.ndimage import find_objects, label
 from scipy.signal import fftconvolve, correlate
 
 from lib_utility import (
-    conv_vector, down_sample_function_t, exp_decay, exp_fit, find_peaks_and_boundaries, get_names, get_real_kernel_sd,
+    conv_vector, down_sample_function_t, exp_decay, exp_fit, exp_to_lin, find_peaks_and_boundaries, get_names,
+    get_real_kernel_sd,
     lin_fit, make_name,
     parabolic_fit,
     remove_nan,
@@ -23,7 +25,7 @@ from lib_utility import (
     crossing_point, extender, apply_by, mse, timing, prev_change, down_sample_function, smoothing, reset_array,
     remove_shift, file_info, calculate_area, correct_bound, vtp_relative
     )
-from copy import copy as cp_copy
+from copy import deepcopy
 from scipy import fft
 from matplotlib.ticker import FuncFormatter
 
@@ -82,14 +84,14 @@ def teardown_workspace(*objects_to_delete):
 
 @timing
 def copy_instance(ori_inst: 'EvtPro', direction: int) -> 'EvtPro':
-    temp_obj = cp_copy(ori_inst)  # Instantiation of the recordings
+    temp_obj = deepcopy(ori_inst)  # Instantiation of the recordings
     temp_obj.direction = direction
     return temp_obj
 
 
 @timing
 def make_instances(ori_inst: 'EvtPro', direction, start: float, end: float, copies: int) -> List['EvtPro']:
-    temp_obj = cp_copy(ori_inst)  # Instantiation of the recordings
+    temp_obj = deepcopy(ori_inst)  # Instantiation of the recordings
     temp_obj.section(start, end)
     if temp_obj.mode == "continuous":
         temp_obj.find_pulses()
@@ -110,98 +112,6 @@ def _get_sparse_indices(arr):
 
     # Ensure no out-of-bounds indices, then return unique (sorted) indices
     return np.unique(np.clip(idx, 0, len(arr) - 1))
-
-
-# @timing
-# def plot_adaptive_analysis(rec, smooth, der, sder, title="Adaptive Threshold Analysis"):
-#     """
-#     Displays a 2x2 grid of response and derivative plots alongside their
-#     adaptive threshold differences. Incorporates scorched-earth memory
-#     management and event loop handling for safe, non-blocking execution.
-#     """
-#     # ---------------------------------------------------------
-#     # PRE-CALCULATE DIFFERENCES
-#     # ---------------------------------------------------------
-#     diff_resp_g_conv_resp = rec.resp - rec.adaptive_sresp
-#     diff_sresp_g_conv_sresp = smooth.resp - smooth.adaptive_sresp
-#     diff_derv_g_conv_derv = der.resp - der.adaptive_sresp
-#     diff_sderv_g_conv_sderv = sder.resp - sder.adaptive_sresp
-#
-#     # ---------------------------------------------------------
-#     # FIGURE & AXES SETUP
-#     # ---------------------------------------------------------
-#     # Create 2x2 subplots sharing the X-axis for synchronized zooming/panning
-#     fig, axs = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
-#     ax1, ax2 = axs[0, 0], axs[0, 1]
-#     ax3, ax4 = axs[1, 0], axs[1, 1]
-#
-#     if title:
-#         fig.suptitle(title, fontsize=14)
-#
-#     # Format all axes with a zero-line baseline
-#     for ax in [ax1, ax2, ax3, ax4]:
-#         ax.axhline(y=0.0, color='k', linestyle='dashed', linewidth=1, alpha=0.5)
-#
-#     # ---------------------------------------------------------
-#     # ROW 1, COLUMN 1: Response
-#     # ---------------------------------------------------------
-#     ax1.plot(rec.time, rec.resp, 'r', label="rec.resp")
-#     ax1.plot(smooth.time, smooth.resp, 'k', label="smooth.resp")
-#     ax1.plot(smooth.time, smooth.adaptive_sresp, 'b:', label="adaptive_sresp")
-#     ax1.plot(smooth.time, smooth.peak_noise, 'g:')
-#     ax1.set_title("Response (smooth.resp)")
-#
-#     # ---------------------------------------------------------
-#     # ROW 1, COLUMN 2: Derivative
-#     # ---------------------------------------------------------
-#     ax2.plot(rec.time, rec.derivative, 'r', label="rec.derivative")
-#     ax2.plot(sder.time, sder.resp, 'k', label="sder.resp")
-#     ax2.plot(sder.time, sder.adaptive_sresp, 'b:', label="sder.adaptive_sresp")
-#     ax2.plot(sder.time, sder.peak_noise, 'g:')
-#     ax2.set_title("Derivative (der.resp)")
-#
-#     # ---------------------------------------------------------
-#     # ROW 2, COLUMN 1: Response Difference
-#     # ---------------------------------------------------------
-#     ax3.plot(rec.time, diff_resp_g_conv_resp, 'r')
-#     ax3.plot(smooth.time, diff_sresp_g_conv_sresp, 'k')
-#     ax3.plot(smooth.time, smooth.direction * smooth.interpolated_sd, 'g:')
-#     ax3.set_title("smooth.resp - smooth.adaptive_sresp")
-#     ax3.set_xlabel("Time")
-#
-#     # ---------------------------------------------------------
-#     # ROW 2, COLUMN 2: Derivative Difference
-#     # ---------------------------------------------------------
-#     ax4.plot(der.time, diff_derv_g_conv_derv, 'r')
-#     ax4.plot(sder.time, diff_sderv_g_conv_sderv, 'k')
-#     ax4.plot(sder.time, sder.direction * sder.interpolated_sd, 'g:')
-#     ax4.set_title("sder.resp - sder.adaptive_sresp")
-#     ax4.set_xlabel("Time")
-#
-#     plt.tight_layout()
-#
-#     # ---------------------------------------------------------
-#     # MATPLOTLIB EVENT LOOP & RAM CLEARING
-#     # ---------------------------------------------------------
-#     plt.show(block=False)
-#     fig.canvas.draw()
-#
-#     def on_close(event):
-#         event.canvas.stop_event_loop()
-#
-#     cid = fig.canvas.mpl_connect('close_event', on_close)
-#     fig.canvas.start_event_loop(timeout=0)
-#
-#     # SCORCHED EARTH RAM CLEARING
-#     fig.canvas.mpl_disconnect(cid)
-#     fig.clear()
-#     plt.close(fig)
-#     plt.close('all')
-#
-#     # Delete heavy local arrays and objects to force memory deallocation immediately
-#     del diff_resp_g_conv_resp, diff_sresp_g_conv_sresp, diff_derv_g_conv_derv, diff_sderv_g_conv_sderv
-#     del fig, axs, ax1, ax2, ax3, ax4
-#     gc.collect()
 
 
 @timing
@@ -334,149 +244,6 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     plt.close('all')
     del fig, ax1, ax2
     gc.collect()
-
-
-# def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
-#     """
-#     Displays two vertically stacked plots sharing the X-axis.
-#     Plots all points in the recording without decimation, while retaining
-#     exact indices and vlines for accurate, fast peak rendering.
-#     """
-#     # Create two subplots stacked vertically
-#     fig, (ax1, ax2) = plt.subplots(
-#             2, 1, sharex=True, figsize=(9, 7),
-#             gridspec_kw={'height_ratios': [1, 1]}
-#             )
-#
-#     # ---------------------------------------------------------
-#     # DYNAMIC SCALING & NORMALIZATION
-#     # ---------------------------------------------------------
-#     # 1. Base maximum for the derivative background
-#     max_amp_der = np.max(np.abs(rec.derivative)) if len(rec.derivative) > 0 else 1.0
-#
-#     # 2. Normalize rec.peaks to max absolute amplitude of 60.0
-#     max_abs_peak = np.max(np.abs(rec.peaks))
-#     if max_abs_peak == 0: max_abs_peak = 1.0  # Prevent division by zero
-#     scaled_peaks = rec.peaks * (120.0 / max_abs_peak)
-#
-#     # 3. Normalize rec.der_peaks to max absolute amplitude of max_amp_der
-#     max_abs_der_peak = np.max(np.abs(rec.der_peaks))
-#     if max_abs_der_peak == 0: max_abs_der_peak = 1.0  # Prevent division by zero
-#     scaled_der_peaks = rec.der_peaks * (max_amp_der / max_abs_der_peak)
-#
-#     # --- Array Indexing Setup ---
-#     # Find the EXACT integer locations where the peaks and crossings exist
-#     idx_p = np.nonzero(rec.peaks)[0]
-#     idx_dp = np.nonzero(rec.der_peaks)[0]
-#     idx_zp = np.nonzero(rec.zero_pass)[0]
-#
-#     # Extract boundary indices from the list of tuples (peak_idx, start_idx, end_idx)
-#     idx_bounds = []
-#     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
-#         for _, start, end in rec.peak_boundaries:
-#             # We subtract 1 from 'end' because standard Python slicing is exclusive,
-#             # so the actual final point of the boundary is at end - 1.
-#             idx_bounds.extend([start, min(end - 1, len(rec.time) - 1)])
-#     idx_bounds = np.array(idx_bounds, dtype=int)
-#
-#     # --- Formatting both axes ---
-#     for ax in [ax1, ax2]:
-#         ax.axhline(y=0.0, color="k", linestyle='--', alpha=0.5)
-#         for x_val in values_x:
-#             ax.axvline(x=x_val, color="r", linestyle='--', alpha=0.6)
-#
-#     # ---------------------------------------------------------
-#     # TOP PLOT (REC)
-#     # ---------------------------------------------------------
-#     ax1.plot(rec.time, rec.resp, "k", linewidth=2.5, label="Response")
-#
-#     # Draw true vertical lines from the 0 baseline to the scaled peak value
-#     ax1.vlines(
-#             x=rec.time[idx_p],
-#             ymin=-scaled_peaks[idx_p],
-#             ymax=scaled_peaks[idx_p],
-#             colors="r",
-#             linewidth=2.0,
-#             alpha=0.6
-#             )
-#
-#     # Draw true vertical lines for the peak boundaries (start and end limits)
-#     if len(idx_bounds) > 0:
-#         # Scale boundary markers to 25% of the max scaled peak height (60.0)
-#         # and lock to the recording direction
-#         bound_height = 15.0 * rec.direction
-#
-#         ax1.vlines(
-#                 x=rec.time[idx_bounds],
-#                 ymin=-bound_height,
-#                 ymax=bound_height,
-#                 colors="k",
-#                 linewidth=1.0,
-#                 alpha=0.1,
-#                 linestyle='--'
-#                 )
-#
-#     # Plot ALL points of the noise trace without decimation
-#     ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.4)
-#     ax1.set_ylabel("Response (rec)")
-#     ax1.set_title(title)
-#
-#     # ---------------------------------------------------------
-#     # BOTTOM PLOT (DER)
-#     # ---------------------------------------------------------
-#     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
-#     ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
-#
-#     # Draw true vertical lines for the derivative peaks using the normalized array
-#     ax2.vlines(
-#             x=rec.time[idx_dp],
-#             ymin=-scaled_der_peaks[idx_dp],
-#             ymax=scaled_der_peaks[idx_dp],
-#             colors="r",
-#             linewidth=2.0,
-#             alpha=0.6
-#             )
-#
-#     # Zero pass: Strip the inherent -1 signs, scale by 25% of max slope, lock to direction
-#     zp_heights = np.abs(rec.zero_pass) * (max_amp_der * 0.25) * rec.direction
-#
-#     # Draw true vertical lines for the zero-pass markers
-#     ax2.vlines(
-#             x=rec.time[idx_zp],
-#             ymin=-zp_heights[idx_zp],
-#             ymax=zp_heights[idx_zp],
-#             colors="k",
-#             linewidth=1.0,
-#             alpha=0.1,
-#             linestyle='--'
-#             )
-#
-#     # Plot ALL points of the noise trace without decimation (NOTE: verify attribute name here)
-#     ax2.plot(rec.time, rec.der_peak_noise, "r:", alpha=0.4)
-#     ax2.set_ylabel("Derivative (rec.derivative)")
-#     ax2.set_xlabel("Time")
-#     #     ax2.plot(der.time, der.peak_noise, "b:", alpha=0.4)
-#     #     ax2.set_ylabel("Derivative (der)")
-#     #     ax2.set_xlabel("Time")
-#     plt.tight_layout()
-#
-#     # --- Matplotlib Event Loop & RAM Clearing ---
-#     plt.show(block=False)
-#     fig.canvas.draw()
-#
-#     def on_close(event):
-#         event.canvas.stop_event_loop()
-#
-#     cid = fig.canvas.mpl_connect('close_event', on_close)
-#     fig.canvas.start_event_loop(timeout=0)
-#
-#     # SCORCHED EARTH RAM CLEARING
-#     fig.canvas.mpl_disconnect(cid)
-#     fig.clear()
-#     plt.close(fig)
-#     plt.close('all')
-#     del fig, ax1, ax2
-#     gc.collect()
 
 
 def plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recording."):
@@ -642,13 +409,34 @@ class loadRecord(base):
         self.__dict__.update(self.data_object.__dict__)
         del self.data_object
 
+    # @timing
+    # def __copy__(self):
+    #     cls = self.__class__
+    #     result = cls.__new__(cls)
+    #     result.__dict__.update(self.__dict__)
+    #     cls.instance_number += 1
+    #     result._instance_number += 1
+    #     return result
+
     @timing
-    def __copy__(self):
+    def __deepcopy__(self, memo):
         cls = self.__class__
         result = cls.__new__(cls)
-        result.__dict__.update(self.__dict__)
+        memo[id(self)] = result
+
+        for key, value in self.__dict__.items():
+            # Skip or shallow-assign file streams and BufferedReader instances
+            if isinstance(value, io.IOBase) or type(value).__name__ in ('BufferedReader', 'BufferedWriter'):
+                setattr(result, key, None)
+            else:
+                try:
+                    setattr(result, key, copy.deepcopy(value, memo))
+                except TypeError:
+                    # Fallback for any other non-copyable internal objects
+                    setattr(result, key, value)
+
         cls.instance_number += 1
-        result._instance_number += 1
+        result._instance_number = cls.instance_number
         return result
 
     @timing
@@ -990,7 +778,8 @@ class Analyzer(Fourier):
         threshold = der_test_resp * 0.0 + self.direction * 9 * np.std(der_test_resp)
         o_thresh = find_over_threshold(der_test_resp, threshold, direction)
         self.pulses_peaks, _ = find_peaks_and_boundaries(o_thresh, der_test_resp, direction)
-        self.pul_attrs = {evt_pos: {"t_o_p": self.time[evt_pos]} for evt_pos, val in enumerate(self.pulses_peaks) if val}
+        self.pul_attrs = {evt_pos: {"t_o_p": self.time[evt_pos]} for evt_pos, val in enumerate(self.pulses_peaks) if
+                          val}
 
     @timing
     def del_pulses(self, del_length=0.75, target_val=2000.0):
@@ -1010,6 +799,7 @@ class Analyzer(Fourier):
         index = np.where(resp_copy == target_val)[0]
         self.time = np.delete(time_copy, index)
         self.resp = np.delete(resp_copy, index)
+
     # def del_pulses(self, del_length=0.75, target_val=2000.0):
     #     peaks = self.pulses_peaks
     #     resp_copy = copy.deepcopy(self.resp)
@@ -1037,6 +827,7 @@ class Analyzer(Fourier):
         index = np.where(resp_copy == target_val)[0]
         self.time = np.delete(time_copy, index)
         self.resp = np.delete(resp_copy, index)
+
     # def del_artifacts(self, artifacts_at, artifact_width, target_val=2000.0):
     #     resp_copy = copy.deepcopy(self.resp)
     #     time_copy = copy.deepcopy(self.time)
@@ -2036,10 +1827,7 @@ class EvtPro(Analyzer):
         self._get_adj(baseline_time)
 
     @timing
-    def fit_events(
-            self, gaussian_window=0.002, fit_beg=0.00, fit_end=0.015, pearson_r_min=0.9, sharpness=2,
-            tau_min=0.001, tau_max=0.01, normal_mse_fit_max=3.0, n_limit=100, std=1.0, min_length=0.0015,
-            ):
+    def fit_events(self, gaussian_window=0.002, fit_beg=0.00, fit_end=0.015, sharpness=2, min_length=0.0015):
         """
         Fits the decay phase of events to an exponential curve.
         Operates strictly in data-gathering mode; does not reject events.
@@ -2050,15 +1838,14 @@ class EvtPro(Analyzer):
         min_len_pts = vtp(min_length, self.t_delta)
         pos_fit_start = vtp(fit_beg, self.t_delta)
         pos_fit_end = vtp(fit_end, self.t_delta)
-
+        dire = self.direction
         fig, ax = plt.subplots(figsize=(8, 5))  # testing... delete me after
 
         for evt_time, evt_data in self.events_attrs.items():
             evt_data.update(
                     {
                             "fit_min"  : np.nan, "fit_peak": np.nan, "tau": np.nan,
-                            "mse_fit"  : np.nan, "pearson_r": np.nan,
-                            "fit_valid": (False, False, False, False, False)
+                            "mse_fit"  : np.nan, "pearson_r": np.nan, "decay_slope": np.nan,
                             }
                     )
 
@@ -2076,10 +1863,19 @@ class EvtPro(Analyzer):
             if s_resp_s.size == 0:
                 continue
 
-            if self.direction == 1:
-                local_ds_end = np.argmin(s_resp_s)
-            elif self.direction == -1:
-                local_ds_end = np.argmax(s_resp_s)
+            # =========================================================
+            # DYNAMIC DECAY TRUNCATION (POLARITY & ZERO-CROSSING)
+            # =========================================================
+            if dire == 1:
+                # Positive-going: keep strictly positive values (> 0)
+                invalid_pts = np.where(s_resp_s <= 0)[0]
+                zero_cross_end = invalid_pts[0] if invalid_pts.size > 0 else s_resp_s.size
+                local_ds_end = min(np.argmin(s_resp_s), zero_cross_end)
+            elif dire == -1:
+                # Negative-going: keep strictly negative values (< 0)
+                invalid_pts = np.where(s_resp_s >= 0)[0]
+                zero_cross_end = invalid_pts[0] if invalid_pts.size > 0 else s_resp_s.size
+                local_ds_end = min(np.argmax(s_resp_s), zero_cross_end)
             else:
                 print(f"Wrong direction at {evt_time}")
                 continue
@@ -2095,40 +1891,29 @@ class EvtPro(Analyzer):
             if local_ds_end <= 0 or r_s_short.size < min_len_pts or r_s_short.size != t_short.size:
                 continue
 
-            fit_i_0, fit_pk0, fit_t0, pearson_r = exp_fit(r_s_short, t_short, self.direction)
+            fit_i_0, fit_pk0, fit_t0, pearson_r = exp_fit(r_s_short, t_short, dire)
             r_short = r_segm[fit_region_restricted]
             fit_curve = exp_decay(t_short, fit_i_0, fit_pk0, fit_t0)  # testing... delete me after
             mse_fit = mse(r_short, fit_curve)
 
             # testing... delete me after
-            ax.plot(t_segm, r_segm, color="black", alpha=0.3)  # testing... delete me after
-            ax.plot(t_short, fit_curve, color="red", linewidth=1.5, alpha=0.8)  # testing... delete me after
-
-            amplitude = evt_data.get("amplitude", 1.0)
-            normal_mse_fit = mse_fit / amplitude if amplitude != 0 else float('inf')
-
-            condition_pearson = abs(pearson_r) >= pearson_r_min
-            condition_mse = abs(normal_mse_fit) <= normal_mse_fit_max
-            condition_tau = tau_max >= abs(fit_t0) >= tau_min
-            condition_fit_i_0 = abs(fit_i_0) <= abs(n_limit * std)
-            condition_direction = (fit_pk0 * self.direction) - (fit_i_0 * self.direction) > std
-
-            fit_valid_tuple = (
-                    bool(condition_pearson),
-                    bool(condition_mse),
-                    bool(condition_tau),
-                    bool(condition_fit_i_0),
-                    bool(condition_direction)
-                    )
+            if 1482.265 < evt_data["t_o_p"] < 1482.296:  # testing... delete me after
+                # def exp_fit(response, time, direction):
+                lin_resp = exp_to_lin(r_s_short, dire)
+                ax.plot(t_short, lin_resp, color="blue", alpha=0.3)  # testing... delete me after
+                print(f"{'T'*20} Testing delete me after... {fit_i_0=} {fit_pk0=} {fit_t0=} {pearson_r=}")
+                ax.plot(t_segm, r_segm, color="black", alpha=0.3)  # testing... delete me after
+                ax.plot(t_short, r_s_short, color="black", alpha=0.3)  # testing... delete me after
+                ax.plot(t_short, fit_curve, color="red", linewidth=1.5, alpha=0.8)  # testing... delete me after
 
             evt_data.update(
                     {
-                            "fit_min"  : fit_i_0,
-                            "fit_peak" : fit_pk0,
-                            "tau"      : fit_t0,
-                            "mse_fit"  : mse_fit,
-                            "pearson_r": pearson_r,
-                            "fit_valid": fit_valid_tuple
+                            "fit_min"       : fit_i_0,
+                            "fit_peak"      : fit_pk0,
+                            "tau"           : fit_t0,
+                            "decay_slope"   : -fit_pk0/fit_t0,
+                            "mse_fit"       : mse_fit,
+                            "pearson_r"     : pearson_r,
                             }
                     )
 
@@ -2139,7 +1924,7 @@ class EvtPro(Analyzer):
         plt.show()  # testing... delete me after
 
     @timing
-    def inspect_fits(self, max_events=9, show_only_invalid=False, randomize=False):
+    def inspect_fits(self, max_events=9, randomize=True):
         """
         Generates a grid plot of event traces overlaid with their exponential fits.
 
@@ -2157,12 +1942,6 @@ class EvtPro(Analyzer):
             random.shuffle(event_items)
 
         for evt_time, evt_data in event_items:
-            fit_valid_tuple = evt_data.get("fit_valid", (False, False, False, False, False))
-            is_valid = all(fit_valid_tuple)
-
-            # Skip if we only want to see the failures
-            if show_only_invalid and is_valid:
-                continue
 
             # Only plot events that actually generated fit data (didn't early-continue)
             if not np.isnan(evt_data.get("tau", np.nan)):
@@ -2190,12 +1969,6 @@ class EvtPro(Analyzer):
             r_segm = evt_data["r_segm"]
             peak_pos = np.argmax(evt_data["p_segm"])
 
-            fit_valid_tuple = evt_data.get("fit_valid", (False, False, False, False, False))
-            is_valid = all(fit_valid_tuple)
-
-            # Generate the 'TFTTT' string
-            cond_str = "".join(['T' if v else 'F' for v in fit_valid_tuple])
-
             # Plot the raw trace snippet
             ax.plot(t_segm, r_segm, label="Raw Trace", color="lightgray", linewidth=2)
             ax.axvline(t_segm[peak_pos], color="gray", linestyle=":", alpha=0.6, label="Peak")
@@ -2213,14 +1986,13 @@ class EvtPro(Analyzer):
                 fit_curve = exp_decay(t_fit, fit_i0, fit_pk0, fit_t0)
 
                 # Color code based on whether it passed your constraints
-                line_color = "black" if is_valid else "crimson"
+                line_color = "black"
                 ax.plot(t_fit, fit_curve, color=line_color, label="Exp Fit", linewidth=2, alpha=0.8)
 
             # Formatting
-            title_color = "black" if is_valid else "darkred"
-            status = "VALID" if is_valid else "REJECTED"
+            title_color = "black"
             ax.set_title(
-                    f"Event: {evt_time:.3f}s [{status} | {cond_str}]\n"
+                    f"Event: {evt_time:.3f}s]\n"
                     f"r:{evt_data.get('pearson_r', 0):.4f}, MSE:{evt_data.get('mse_fit', 0):.4f}, tau:{fit_t0:.4f}",
                     color=title_color, fontsize=10
                     )
@@ -2528,14 +2300,38 @@ class EvtPro(Analyzer):
             min_auc: float = 0.0005,
             min_pearson_r: float = 0.9,
             min_ampl: float = -1.48,
-            use_fit: bool = True
+            use_fit: bool = True,
+            fit_tau_max: float = 0.002,
+            fit_tau_min: float = 0.0005
             ):
         if not self.events_attrs:
             print("Screening cancelled: No raw putative events available to process.")
             return
 
+        dire = self.direction
         initial_event_times = list(self.events_attrs.keys())
         print(f"Starting downstream screening pass on {len(initial_event_times)} putative events...")
+
+        def fmt(key: str, spec: str = ".4f") -> str:
+            val = evt.get(key)
+            if isinstance(val, (int, float)) and not np.isnan(val):
+                return f"{key}={val:{spec}}"
+            return f"{key}={val}"
+
+        def check_rule(
+                key: str,
+                failed: bool,
+                reason_: str,
+                thresh_name: str,
+                thresh_val: float,
+                spec: str = ".4f"
+                ) -> bool:
+            if failed:
+                msg = (f" Event at {evt_time:12.4f}[s] rejected: {reason_} "
+                       f"{fmt(key, spec)} ({thresh_name}={thresh_val:{spec}}).")
+                self._reject_event(evt_time, reason_, msg)
+                return True
+            return False
 
         for evt_time in initial_event_times:
             evt = self.events_attrs[evt_time]
@@ -2543,65 +2339,72 @@ class EvtPro(Analyzer):
             # =====================================================================
             # 1. STRUCTURAL & ZERO-PASS INTEGRITY CONSTRAINTS
             # =====================================================================
-            # COMPATIBILITY FIX: Updated key to 'peak_error_time'
-            if evt["peak_error_time"] is None or abs(evt["peak_error_time"]) > zp_to_pp:
-                msg = f" Event at {evt_time:12.4f}[s] rejected: {evt["peak_error_time"]=:.6f} ({zp_to_pp=:.6f}[s])."
-                self._reject_event(evt_time, "peak_alignment_error", msg)
+            peak_err = evt.get("peak_error_time")
+            bad_peak_err = peak_err is None or abs(peak_err) > zp_to_pp
+            if check_rule("peak_error_time", bad_peak_err,
+                          "peak_alignment_error", "zp_to_pp", zp_to_pp, ".6f"):
                 continue
 
             # =====================================================================
             # 2. DERIVATIVE & VELOCITY CONSTRAINTS
             # =====================================================================
-            slope_value = evt["rise_slope_val"]
-            is_rejected_slope = False
-            match self.direction:
-                case -1:
-                    if not max_slope < slope_value: is_rejected_slope = True
-                case 1:
-                    if not max_slope > slope_value: is_rejected_slope = True
+            rise_slope = evt.get("rise_slope_val")
+            bad_slope = rise_slope is None or (rise_slope <= max_slope if dire == -1 else rise_slope >= max_slope)
+            if check_rule("rise_slope_val", bad_slope,
+                          "slope_threshold", "max_slope", max_slope, ".2f"):
+                continue
 
-            if is_rejected_slope:
-                msg = f" Event at {evt_time:12.4f}[s] rejected: ({slope_value=:.2f}) ({max_slope:.2f})."
-                self._reject_event(evt_time, "slope_threshold", msg)
+            decay_slope = evt.get("decay_slope")
+            bad_slope_ratio = decay_slope is None or decay_slope/rise_slope >= 0.0 or abs(decay_slope) > 1.1*abs(rise_slope)
+            if check_rule("rise_slope_val", bad_slope_ratio,
+                          "wrong_slope_ratio", "max_decay_slope", decay_slope, ".2f"):
                 continue
 
             # =====================================================================
             # 3. KINETIC & PHENOTYPIC SORTING CONSTRAINTS
             # =====================================================================
-            if evt["rise_time_peak"] is None or evt["rise_time_peak"] > max_rise_time:
-                msg = f" Event at {evt_time:12.4f}[s] rejected: {evt["rise_time_peak"]=:.6f} ({max_rise_time=:.6f}[s])."
-                self._reject_event(evt_time, "rise_time_limit", msg)
+            rise_time = evt.get("rise_time_peak")
+            bad_rise_time = rise_time is None or rise_time > max_rise_time
+            if check_rule("rise_time_peak", bad_rise_time,
+                          "rise_time_limit", "max_rise_time", max_rise_time, ".6f"):
                 continue
 
-            # COMPATIBILITY FIX: Updated key to 'slope_peak_delta_time'
-            if evt["slope_peak_delta_time"] is None or evt["slope_peak_delta_time"] > slope_peak_time:
-                msg = f" Event at {evt_time:12.4f}[s] rejected: {evt["slope_peak_delta_time"]=:.6f} ({slope_peak_time=:.6f}[s])."
-                self._reject_event(evt_time, "slope_peak_delta", msg)
+            slope_delta = evt.get("slope_peak_delta_time")
+            bad_slope_delta = slope_delta is None or slope_delta > slope_peak_time
+            if check_rule(
+                    "slope_peak_delta_time", bad_slope_delta,
+                    "slope_peak_delta", "slope_peak_time", slope_peak_time, ".6f"):
                 continue
 
-            if evt["r_auc"] is None or abs(evt["r_auc"]) < abs(min_auc):
-                msg = f" Event at {evt_time:12.4f}[s] rejected: {evt['r_auc']=:.6f} ({min_auc:.6f})."
-                self._reject_event(evt_time, "low_auc", msg)
+            r_auc = evt.get("r_auc")
+            bad_auc = r_auc is None or dire*r_auc < dire*min_auc
+            if check_rule("r_auc", bad_auc,
+                          "low_auc", "min_auc", min_auc, ".6f"):
                 continue
 
             # =====================================================================
             # 4. FIT QUALITY CONSTRAINTS
             # =====================================================================
             if use_fit:
-                if evt.get("pearson_r") is None or self.direction * evt["pearson_r"] < self.direction * min_pearson_r:
-                    msg = f" Event at {evt_time:12.4f}[s] rejected: {evt['pearson_r']=:.6f} ({min_pearson_r:.6f})."
-                    self._reject_event(evt_time, "poor_pearson_r", msg)
+                pearson_r = evt.get("pearson_r")
+                bad_pearson_r = pearson_r is None or np.isnan(pearson_r) or dire*pearson_r < dire*min_pearson_r
+                if check_rule("pearson_r", bad_pearson_r,
+                              "poor_pearson_r", "min_pearson_r", min_pearson_r, ".6f"):
+                    continue
+
+                tau = evt.get("tau")
+                bad_tau = tau is None or np.isnan(tau) or not (fit_tau_min < tau < fit_tau_max)
+                if check_rule("tau", bad_tau,
+                              "invalid_tau", "fit_tau_max", fit_tau_max, ".4f"):
                     continue
 
             # =====================================================================
             # 5. AMPLITUDE CONSTRAINTS
             # =====================================================================
             amp_val = evt.get("amplitude")
-            if amp_val is None or not (amp_val * self.direction > min_ampl * self.direction):
-                msg = f" Event at {evt_time:12.4f}[s] rejected: missing amplitude."
-                if amp_val is not None:
-                    msg = f" Event at {evt_time:12.4f}[s] rejected: {evt['amplitude']=:.2f} ({min_ampl:.2f})."
-                self._reject_event(evt_time, "amplitude_limit", msg)
+            bad_amp = amp_val is None or not (amp_val * dire > min_ampl * dire)
+            if check_rule("amplitude", bad_amp,
+                          "amplitude_limit", "min_ampl", min_ampl, ".2f"):
                 continue
 
         current_rejections = sum(self.rejected_counts.values())
@@ -2617,6 +2420,129 @@ class EvtPro(Analyzer):
             if count > 0:
                 print(f"  • {reason:<25}: {count}")
         print("=" * 50 + "\n")
+
+    # def screen_events(
+    #         self,
+    #         max_slope: float = -15000,
+    #         zp_to_pp: float = 0.002,
+    #         max_rise_time: float = 0.010,
+    #         slope_peak_time: float = 0.005,
+    #         min_auc: float = 0.0005,
+    #         min_pearson_r: float = 0.9,
+    #         min_ampl: float = -1.48,
+    #         use_fit: bool = True,
+    #         fit_tau_max: float = 0.002,
+    #         fit_tau_min: float = 0.0005
+    #         ):
+    #     if not self.events_attrs:
+    #         print("Screening cancelled: No raw putative events available to process.")
+    #         return
+    #
+    #     initial_event_times = list(self.events_attrs.keys())
+    #     print(f"Starting downstream screening pass on {len(initial_event_times)} putative events...")
+    #
+    #     # Defined ONCE before the loop; dynamically looks up `evt` in screen_events scope
+    #     def fmt(key: str, spec: str = ".4f") -> str:
+    #         val = evt.get(key)
+    #         if isinstance(val, (int, float)) and not np.isnan(val):
+    #             return f"{key}={val:{spec}}"
+    #         return f"{key}={val}"
+    #
+    #     for evt_time in initial_event_times:
+    #         evt = self.events_attrs[evt_time]
+    #
+    #         # =====================================================================
+    #         # 1. STRUCTURAL & ZERO-PASS INTEGRITY CONSTRAINTS
+    #         # =====================================================================
+    #         peak_error_time = evt.get("peak_error_time")
+    #         if peak_error_time is None or abs(peak_error_time) > zp_to_pp:
+    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                    f"{fmt('peak_error_time', '.6f')} ({zp_to_pp=:.6f}[s]).")
+    #             self._reject_event(evt_time, "peak_alignment_error", msg)
+    #             continue
+    #
+    #         # =====================================================================
+    #         # 2. DERIVATIVE & VELOCITY CONSTRAINTS
+    #         # =====================================================================
+    #         slope_value = evt.get("rise_slope_val")
+    #         is_rejected_slope = False
+    #         match self.direction:
+    #             case -1:
+    #                 if not max_slope < slope_value: is_rejected_slope = True
+    #             case 1:
+    #                 if not max_slope > slope_value: is_rejected_slope = True
+    #
+    #         if is_rejected_slope:
+    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                    f"{fmt('rise_slope_val', '.2f')} ({max_slope=:.2f}).")
+    #             self._reject_event(evt_time, "slope_threshold", msg)
+    #             continue
+    #
+    #         # =====================================================================
+    #         # 3. KINETIC & PHENOTYPIC SORTING CONSTRAINTS
+    #         # =====================================================================
+    #         rise_time_peak = evt.get("rise_time_peak")
+    #         if rise_time_peak is None or rise_time_peak > max_rise_time:
+    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                    f"{fmt('rise_time_peak', '.6f')} ({max_rise_time=:.6f}[s]).")
+    #             self._reject_event(evt_time, "rise_time_limit", msg)
+    #             continue
+    #
+    #         slope_peak_delta_time = evt.get("slope_peak_delta_time")
+    #         if slope_peak_delta_time is None or slope_peak_delta_time > slope_peak_time:
+    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                    f"{fmt('slope_peak_delta_time', '.6f')} ({slope_peak_time=:.6f}[s]).")
+    #             self._reject_event(evt_time, "slope_peak_delta", msg)
+    #             continue
+    #
+    #         r_auc = evt.get("r_auc")
+    #         if r_auc is None or abs(r_auc) < abs(min_auc):
+    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                    f"{fmt('r_auc', '.6f')} ({min_auc=:.6f}).")
+    #             self._reject_event(evt_time, "low_auc", msg)
+    #             continue
+    #
+    #         # =====================================================================
+    #         # 4. FIT QUALITY CONSTRAINTS
+    #         # =====================================================================
+    #         if use_fit:
+    #             pearson_r = evt.get("pearson_r")
+    #             if pearson_r is None or np.isnan(pearson_r) or abs(pearson_r) < abs(min_pearson_r):
+    #                 msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                        f"{fmt('pearson_r', '.6f')} ({min_pearson_r=:.6f}).")
+    #                 self._reject_event(evt_time, "poor_pearson_r", msg)
+    #                 continue
+    #
+    #             tau = evt.get("tau")
+    #             if tau is None or np.isnan(tau) or not (abs(fit_tau_min) < abs(tau) < abs(fit_tau_max)):
+    #                 msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                        f"{fit_tau_min=:.4f} {fmt('tau', '.4f')} {fit_tau_max=:.4f}.")
+    #                 self._reject_event(evt_time, "invalid_tau", msg)
+    #                 continue
+    #
+    #         # =====================================================================
+    #         # 5. AMPLITUDE CONSTRAINTS
+    #         # =====================================================================
+    #         amp_val = evt.get("amplitude")
+    #         if amp_val is None or not (amp_val * self.direction > min_ampl * self.direction):
+    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
+    #                    f"{fmt('amplitude', '.2f')} ({min_ampl=:.2f}).")
+    #             self._reject_event(evt_time, "amplitude_limit", msg)
+    #             continue
+    #
+    #     current_rejections = sum(self.rejected_counts.values())
+    #     print("\n" + "=" * 50)
+    #     print(" SCREENING PASS COMPLETE COMPLIANCE SUMMARY")
+    #     print("=" * 50)
+    #     print(f" Putative Events Inputted : {len(initial_event_times)}")
+    #     print(f" Validated Events Retained: {len(self.events_attrs)}")
+    #     print(f" Total Lifetime Rejections: {current_rejections}")
+    #     print("-" * 50)
+    #     print(" Cumulative Breakdown of Rejections:")
+    #     for reason, count in self.rejected_counts.items():
+    #         if count > 0:
+    #             print(f"  • {reason:<25}: {count}")
+    #     print("=" * 50 + "\n")
 
     @timing
     def burst(self, kernel_length=0.5, min_num_ap=1):
@@ -2753,7 +2679,8 @@ class EvtPro(Analyzer):
 
     @timing
     def show_all_events(
-            self, title: str = 'Recording Events Comparison', show_events: bool = True, adjust: bool = True
+            self, title: str = 'Recording Events Comparison',
+            show_events: bool = True, adjust: bool = True, smooth_params=()
             ) -> None:
         # Stack subplots vertically and synchronize both X and Y axes
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 5), sharex=True, sharey=True)
@@ -2764,8 +2691,10 @@ class EvtPro(Analyzer):
         # =========================================================
         ax2.axhline(y=0.0, color="k", linestyle='--')
 
-        resp_no_events = self.resp.copy()
+        # 1. Create independent copy FIRST to avoid mutating the original instance
+        self_copy = deepcopy(self)
 
+        # 2. Subtract events from self_copy.resp instead of self.resp
         for evt_pos, evt in self.events_attrs.items():
             r_segm = evt["r_segm"]
             p_segm = evt["p_segm"]
@@ -2774,25 +2703,26 @@ class EvtPro(Analyzer):
                 idx_p = np.nonzero(p_segm)[0]
 
                 if idx_p.size > 0:
-                    # Resolve peak index in array and align slice start to the peak offset
                     peak_idx = int(evt_pos) if isinstance(evt_pos, (int, np.integer)) else vtp_relative(
                             evt_pos, self.time
                             )
                     start_idx = peak_idx - idx_p[0]
                 else:
-                    # Fallback if peak marker array is empty
                     t_o_p = evt["t_o_p"]
                     t_segm = evt["t_segm"]
                     x_time = t_segm + t_o_p
                     start_idx = vtp_relative(x_time[0], self.time)
 
-                end_idx = min(start_idx + len(r_segm), len(resp_no_events))
+                end_idx = min(start_idx + len(r_segm), len(self_copy.resp))
                 slice_len = end_idx - start_idx
 
                 if slice_len > 0 and start_idx >= 0:
-                    resp_no_events[start_idx:end_idx] -= r_segm[:slice_len]
+                    self_copy.resp[start_idx:end_idx] -= r_segm[:slice_len]
 
-        ax2.plot(self.time, resp_no_events, "k", linewidth=1.2, label="Subtracted Trace")
+        if smooth_params:  # This block is to remove the noise and make any remaining undetected event more visible
+            self_copy.get_smooth(*smooth_params)
+
+        ax2.plot(self.time, self_copy.resp, "k", linewidth=1.2, label="Subtracted Trace")
         ax2.set_title(f"Subtracted Recording ({len(self.events_attrs)} events removed)")
         ax2.set_xlabel("Time (s)")
         ax2.set_ylabel("Amplitude")
@@ -2900,6 +2830,7 @@ class EvtPro(Analyzer):
         # ---------------------------------------------------------
         # ASYNC RAM CLEARING BLOCK
         # ---------------------------------------------------------
+
         def on_close(event):
             event.canvas.figure.clear()
             plt.close(event.canvas.figure)

@@ -6,8 +6,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from lib_event_detection import EvtPro, make_instances, plot_rec, plot_smooth, setup_workspace, \
-    teardown_workspace, \
-    test_main
+    teardown_workspace, test_main
 from lib_gui import ConstDialog
 from lib_utility import (
     auto_save, average_by, event_count, event_fr, make_name, make_sections, save_dict, save_plot,
@@ -42,7 +41,6 @@ const: dict[str, Any] = dict(
         min_amplitude=0.0001,  # threshold to accept an event
         min_auc=-0.02,  # Minimal area under the curve accepted for the events
         max_slope=-1000000,  # Use this value for slope based selection, begin with 20k then reduce until is right
-
 
         baseline_time=0.002,  # seconds
         peak_radius=0.0002,  # seconds
@@ -381,11 +379,7 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
             )
 
     if const["use_fit"]:
-        rec.fit_events(
-                const["gaussian_window"], const["fit_beg"], const["fit_end"],
-                const["pearson_r_min"], const["fit_sharpness"], const["fit_tau_min"],
-                const["fit_tau_max"], const["normal_mse_fit_max"], const["n_limit"],
-                )
+        rec.fit_events(const["gaussian_window"], const["fit_beg"], const["fit_end"], const["fit_sharpness"])
 
     rec.get_extended()  # Extension of the events to use a common time interval
 
@@ -421,13 +415,15 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
                 const["min_auc"],
                 const["pearson_r_min"],
                 const["min_amplitude"],
-                const["use_fit"]
+                const["use_fit"],
+                const["fit_tau_max"],
+                const["fit_tau_min"],
                 )
 
         # 3. Visualize the remaining events
         if const["plot_test"]:
             if const["use_fit"]:
-                rec.inspect_fits(9, False, True)
+                rec.inspect_fits(9)
             rec.show_events_aligned(f"Testing screen_events: ")
 
         # 4. Check if we should stop
@@ -470,7 +466,7 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
 
     if const["show_everything"]:
         title = f"From {start:0>4} to {end:0>4}. Detected {const['event_type']}: "
-        rec.show_all_events(title, True, const["adjust"])
+        rec.show_all_events(title, True, const["adjust"], (const["rec_smoothed_width"], const["rec_sharpness"]))
         rec.show_events_aligned(title)
         # rec.show_no_events()
 
@@ -485,7 +481,7 @@ def build_analysis_dicts(build_const: dict) -> tuple[dict, dict, dict, dict, dic
         """Helper to generate a fresh event dictionary with independent zero_arrs."""
 
         d = {
-                "Count": {
+                "Count"               : {
                         "value"   : zero_arr.copy(), "parameter": "amplitude", "units": "#",
                         "function": event_count
                         },
