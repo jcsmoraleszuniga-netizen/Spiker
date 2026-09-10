@@ -1,4 +1,5 @@
 import copy
+import csv
 import gc
 import io
 import os
@@ -121,6 +122,14 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     Plots all points in the recording without decimation, while retaining
     exact indices and vlines for accurate, fast peak rendering using
     blended transforms to keep markers viewport-centered on Y.
+
+    Color Conventions:
+      - Top Plot (Response): Trace in Black ('k'), Peaks & Noise in Red ('r'), Boundaries in Green ('g')
+      - Bottom Plot (Derivative):
+        * Rise/Original Trace in Black ('k')
+        * Softer Decay Trace in Light Gray ('lightgray')
+        * Rise phase: Peaks, Zero-crossings, & Threshold in Red ('r')
+        * Decay phase: Peaks, Zero-crossings, & Threshold in Blue ('b')
     """
     fig, (ax1, ax2) = plt.subplots(
             2, 1, sharex=True, figsize=(9, 7),
@@ -130,19 +139,41 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     # ---------------------------------------------------------
     # DYNAMIC SCALING (NORMALIZED TO AXES FRACTION 0.0 - 0.5)
     # ---------------------------------------------------------
-    # Max peak line extent will occupy up to 30% above/below center (0.5 +/- 0.3)
-    max_abs_peak = np.max(np.abs(rec.peaks)) if len(rec.peaks) > 0 else 1.0
+    # Response Peaks
+    max_abs_peak = np.max(np.abs(rec.peaks)) if hasattr(rec, 'peaks') and len(rec.peaks) > 0 else 1.0
     if max_abs_peak == 0: max_abs_peak = 1.0
     norm_peaks = (np.abs(rec.peaks) / max_abs_peak) * 0.3
 
-    max_abs_der_peak = np.max(np.abs(rec.der_peaks)) if len(rec.der_peaks) > 0 else 1.0
-    if max_abs_der_peak == 0: max_abs_der_peak = 1.0
-    norm_der_peaks = (np.abs(rec.der_peaks) / max_abs_der_peak) * 0.3
+    # Derivative Rise Peaks
+    has_rise = hasattr(rec, 'der_peaks_rise') and len(rec.der_peaks_rise) > 0
+    max_abs_der_rise = np.max(np.abs(rec.der_peaks_rise)) if has_rise else 1.0
+    if max_abs_der_rise == 0: max_abs_der_rise = 1.0
+    norm_der_rise = (np.abs(rec.der_peaks_rise) / max_abs_der_rise) * 0.3 if has_rise else np.array([])
+
+    # Derivative Decay Peaks
+    has_decay = hasattr(rec, 'der_peaks_decay') and len(rec.der_peaks_decay) > 0
+    max_abs_der_decay = np.max(np.abs(rec.der_peaks_decay)) if has_decay else 1.0
+    if max_abs_der_decay == 0: max_abs_der_decay = 1.0
+    norm_der_decay = (np.abs(rec.der_peaks_decay) / max_abs_der_decay) * 0.3 if has_decay else np.array([])
+
+    # Zero Pass Normalizations
+    has_zp_rise = hasattr(rec, 'zero_pass_rise') and len(rec.zero_pass_rise) > 0
+    max_zp_rise = np.max(np.abs(rec.zero_pass_rise)) if has_zp_rise else 1.0
+    if max_zp_rise == 0: max_zp_rise = 1.0
+    norm_zp_rise = (np.abs(rec.zero_pass_rise) / max_zp_rise) * 0.15 if has_zp_rise else np.array([])
+
+    has_zp_decay = hasattr(rec, 'zero_pass_decay') and len(rec.zero_pass_decay) > 0
+    max_zp_decay = np.max(np.abs(rec.zero_pass_decay)) if has_zp_decay else 1.0
+    if max_zp_decay == 0: max_zp_decay = 1.0
+    norm_zp_decay = (np.abs(rec.zero_pass_decay) / max_zp_decay) * 0.15 if has_zp_decay else np.array([])
 
     # --- Array Indexing Setup ---
-    idx_p = np.nonzero(rec.peaks)[0]
-    idx_dp = np.nonzero(rec.der_peaks)[0]
-    idx_zp = np.nonzero(rec.zero_pass)[0]
+    idx_p = np.nonzero(rec.peaks)[0] if hasattr(rec, 'peaks') and len(rec.peaks) > 0 else np.array([], dtype=int)
+    idx_dp_rise = np.nonzero(rec.der_peaks_rise)[0] if has_rise else np.array([], dtype=int)
+    idx_dp_decay = np.nonzero(rec.der_peaks_decay)[0] if has_decay else np.array([], dtype=int)
+
+    idx_zp_rise = np.nonzero(rec.zero_pass_rise)[0] if has_zp_rise else np.array([], dtype=int)
+    idx_zp_decay = np.nonzero(rec.zero_pass_decay)[0] if has_zp_decay else np.array([], dtype=int)
 
     idx_bounds = []
     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
@@ -157,22 +188,22 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
             ax.axvline(x=x_val, color="r", linestyle='--', alpha=0.6)
 
     # ---------------------------------------------------------
-    # TOP PLOT (REC)
+    # TOP PLOT (RESPONSE)
     # ---------------------------------------------------------
     ax1.plot(rec.time, rec.resp, "k", linewidth=2.5, label="Response")
 
-    # Draw vertical lines centered at y=0.5 in Axes space (viewport plane)
-    ax1.vlines(
-            x=rec.time[idx_p],
-            ymin=0.5 - norm_peaks[idx_p],
-            ymax=0.5 + norm_peaks[idx_p],
-            colors="r",
-            linewidth=2.0,
-            alpha=1.0,
-            transform=ax1.get_xaxis_transform()
-            )
+    if len(idx_p) > 0:
+        ax1.vlines(
+                x=rec.time[idx_p],
+                ymin=0.5 - norm_peaks[idx_p],
+                ymax=0.5 + norm_peaks[idx_p],
+                colors="r",
+                linewidth=2.0,
+                alpha=1.0,
+                label="Response Peaks",
+                transform=ax1.get_xaxis_transform()
+                )
 
-    # Draw boundary markers centered at y=0.5 with fixed fractional height
     if len(idx_bounds) > 0:
         ax1.vlines(
                 x=rec.time[idx_bounds],
@@ -182,47 +213,83 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
                 linewidth=2.0,
                 alpha=0.5,
                 linestyle='--',
+                label="Boundaries",
                 transform=ax1.get_xaxis_transform()
                 )
 
-    ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.75)
+    if hasattr(rec, 'peak_noise') and rec.peak_noise is not None:
+        ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.75, label="Peak Noise Threshold")
+
     ax1.set_ylabel("Response (rec)")
     ax1.set_title(title)
 
     # ---------------------------------------------------------
-    # BOTTOM PLOT (DER)
+    # BOTTOM PLOT (DERIVATIVE)
     # ---------------------------------------------------------
     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
-    ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
+    ax2.plot(rec.time, rec.derivative, "k", linewidth=2.5, label="Derivative (Rise)")
 
-    # Draw derivative peak lines centered at y=0.5 in Axes space
-    ax2.vlines(
-            x=rec.time[idx_dp],
-            ymin=0.5 - norm_der_peaks[idx_dp],
-            ymax=0.5 + norm_der_peaks[idx_dp],
-            colors="r",
-            linewidth=2.0,
-            alpha=1.0,
-            transform=ax2.get_xaxis_transform()
-            )
+    if hasattr(rec, 'derivative_decay') and rec.derivative_decay is not None:
+        ax2.plot(rec.time, rec.derivative_decay, color="lightgray", linewidth=1.8, label="Derivative (Decay)")
 
-    # Zero pass markers centered at y=0.5 with relative scale
-    max_zp = np.max(np.abs(rec.zero_pass)) if len(rec.zero_pass) > 0 else 1.0
-    if max_zp == 0: max_zp = 1.0
-    norm_zp = (np.abs(rec.zero_pass) / max_zp) * 0.15
+    # --- RISE KINETICS (RED) ---
+    if len(idx_dp_rise) > 0:
+        ax2.vlines(
+                x=rec.time[idx_dp_rise],
+                ymin=0.5 - norm_der_rise[idx_dp_rise],
+                ymax=0.5 + norm_der_rise[idx_dp_rise],
+                colors="r",
+                linewidth=2.0,
+                alpha=1.0,
+                label="Rise Slope Peaks",
+                transform=ax2.get_xaxis_transform()
+                )
 
-    ax2.vlines(
-            x=rec.time[idx_zp],
-            ymin=0.5 - norm_zp[idx_zp],
-            ymax=0.5 + norm_zp[idx_zp],
-            colors="g",
-            linewidth=2.0,
-            alpha=0.5,
-            linestyle='--',
-            transform=ax2.get_xaxis_transform()
-            )
+    if len(idx_zp_rise) > 0:
+        ax2.vlines(
+                x=rec.time[idx_zp_rise],
+                ymin=0.5 - norm_zp_rise[idx_zp_rise],
+                ymax=0.5 + norm_zp_rise[idx_zp_rise],
+                colors="r",
+                linewidth=2.0,
+                alpha=0.5,
+                linestyle='--',
+                label="Rise Zero Crossings",
+                transform=ax2.get_xaxis_transform()
+                )
 
-    ax2.plot(rec.time, rec.der_peak_noise, "r:", alpha=0.75)
+    if hasattr(rec, 'der_peak_noise_rise') and rec.der_peak_noise_rise is not None:
+        ax2.plot(rec.time, rec.der_peak_noise_rise, "r:", alpha=0.75, label="Rise Threshold")
+
+    # --- DECAY KINETICS (BLUE) ---
+    if len(idx_dp_decay) > 0:
+        ax2.vlines(
+                x=rec.time[idx_dp_decay],
+                ymin=0.5 - norm_der_decay[idx_dp_decay],
+                ymax=0.5 + norm_der_decay[idx_dp_decay],
+                colors="b",
+                linewidth=2.0,
+                alpha=1.0,
+                label="Decay Slope Peaks",
+                transform=ax2.get_xaxis_transform()
+                )
+
+    if len(idx_zp_decay) > 0:
+        ax2.vlines(
+                x=rec.time[idx_zp_decay],
+                ymin=0.5 - norm_zp_decay[idx_zp_decay],
+                ymax=0.5 + norm_zp_decay[idx_zp_decay],
+                colors="b",
+                linewidth=2.0,
+                alpha=0.5,
+                linestyle='--',
+                label="Decay Zero Crossings",
+                transform=ax2.get_xaxis_transform()
+                )
+
+    if hasattr(rec, 'der_peak_noise_decay') and rec.der_peak_noise_decay is not None:
+        ax2.plot(rec.time, rec.der_peak_noise_decay, "b:", alpha=0.75, label="Decay Threshold")
+
     ax2.set_ylabel("Derivative (rec.derivative)")
     ax2.set_xlabel("Time")
 
@@ -246,53 +313,346 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     gc.collect()
 
 
-def plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recording."):
+# @timing
+# def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
+#     """
+#     Displays two vertically stacked plots sharing the X-axis.
+#     Plots all points in the recording without decimation, while retaining
+#     exact indices and vlines for accurate, fast peak rendering using
+#     blended transforms to keep markers viewport-centered on Y.
+#     """
+#     fig, (ax1, ax2) = plt.subplots(
+#             2, 1, sharex=True, figsize=(9, 7),
+#             gridspec_kw={'height_ratios': [1, 1]}
+#             )
+#
+#     # ---------------------------------------------------------
+#     # DYNAMIC SCALING (NORMALIZED TO AXES FRACTION 0.0 - 0.5)
+#     # ---------------------------------------------------------
+#     # Max peak line extent will occupy up to 30% above/below center (0.5 +/- 0.3)
+#     max_abs_peak = np.max(np.abs(rec.peaks)) if len(rec.peaks) > 0 else 1.0
+#     if max_abs_peak == 0: max_abs_peak = 1.0
+#     norm_peaks = (np.abs(rec.peaks) / max_abs_peak) * 0.3
+#
+#     max_abs_der_peak = np.max(np.abs(rec.der_peaks_rise)) if len(rec.der_peaks_rise) > 0 else 1.0
+#     if max_abs_der_peak == 0: max_abs_der_peak = 1.0
+#     norm_der_peaks = (np.abs(rec.der_peaks_rise) / max_abs_der_peak) * 0.3
+#
+#     # --- Array Indexing Setup ---
+#     idx_p = np.nonzero(rec.peaks)[0]
+#     idx_dp = np.nonzero(rec.der_peaks_rise)[0]
+#     idx_zp = np.nonzero(rec.zero_pass_rise)[0]
+#
+#     idx_bounds = []
+#     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
+#         for _, start, end in rec.peak_boundaries:
+#             idx_bounds.extend([start, min(end - 1, len(rec.time) - 1)])
+#     idx_bounds = np.array(idx_bounds, dtype=int)
+#
+#     # --- Formatting both axes ---
+#     for ax in [ax1, ax2]:
+#         ax.axhline(y=0.0, color="k", linestyle='--', alpha=0.5)
+#         for x_val in values_x:
+#             ax.axvline(x=x_val, color="r", linestyle='--', alpha=0.6)
+#
+#     # ---------------------------------------------------------
+#     # TOP PLOT (REC)
+#     # ---------------------------------------------------------
+#     ax1.plot(rec.time, rec.resp, "k", linewidth=2.5, label="Response")
+#
+#     # Draw vertical lines centered at y=0.5 in Axes space (viewport plane)
+#     ax1.vlines(
+#             x=rec.time[idx_p],
+#             ymin=0.5 - norm_peaks[idx_p],
+#             ymax=0.5 + norm_peaks[idx_p],
+#             colors="r",
+#             linewidth=2.0,
+#             alpha=1.0,
+#             transform=ax1.get_xaxis_transform()
+#             )
+#
+#     # Draw boundary markers centered at y=0.5 with fixed fractional height
+#     if len(idx_bounds) > 0:
+#         ax1.vlines(
+#                 x=rec.time[idx_bounds],
+#                 ymin=0.4,
+#                 ymax=0.6,
+#                 colors="g",
+#                 linewidth=2.0,
+#                 alpha=0.5,
+#                 linestyle='--',
+#                 transform=ax1.get_xaxis_transform()
+#                 )
+#
+#     ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.75)
+#     ax1.set_ylabel("Response (rec)")
+#     ax1.set_title(title)
+#
+#     # ---------------------------------------------------------
+#     # BOTTOM PLOT (DER)
+#     # ---------------------------------------------------------
+#     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
+#     ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
+#
+#     # Draw derivative peak lines centered at y=0.5 in Axes space
+#     ax2.vlines(
+#             x=rec.time[idx_dp],
+#             ymin=0.5 - norm_der_peaks[idx_dp],
+#             ymax=0.5 + norm_der_peaks[idx_dp],
+#             colors="r",
+#             linewidth=2.0,
+#             alpha=1.0,
+#             transform=ax2.get_xaxis_transform()
+#             )
+#
+#     # Zero pass markers centered at y=0.5 with relative scale
+#     max_zp = np.max(np.abs(rec.zero_pass_rise)) if len(rec.zero_pass_rise) > 0 else 1.0
+#     if max_zp == 0: max_zp = 1.0
+#     norm_zp = (np.abs(rec.zero_pass_rise) / max_zp) * 0.15
+#
+#     ax2.vlines(
+#             x=rec.time[idx_zp],
+#             ymin=0.5 - norm_zp[idx_zp],
+#             ymax=0.5 + norm_zp[idx_zp],
+#             colors="g",
+#             linewidth=2.0,
+#             alpha=0.5,
+#             linestyle='--',
+#             transform=ax2.get_xaxis_transform()
+#             )
+#
+#     ax2.plot(rec.time, rec.der_peak_noise_rise, "r:", alpha=0.75)
+#     ax2.set_ylabel("Derivative (rec.derivative)")
+#     ax2.set_xlabel("Time")
+#
+#     plt.tight_layout()
+#
+#     # --- Matplotlib Event Loop & RAM Clearing ---
+#     plt.show(block=False)
+#     fig.canvas.draw()
+#
+#     def on_close(event):
+#         event.canvas.stop_event_loop()
+#
+#     cid = fig.canvas.mpl_connect('close_event', on_close)
+#     fig.canvas.start_event_loop(timeout=0)
+#
+#     fig.canvas.mpl_disconnect(cid)
+#     fig.clear()
+#     plt.close(fig)
+#     plt.close('all')
+#     del fig, ax1, ax2
+#     gc.collect()
+#
+
+def plot_smooth(temp_rec, temp_smooth_rise, temp_smooth_decay, title="Original versus smoothed recordings."):
     """
-    Displays a comparison plot of the original and smoothed data.
+    Displays a comparison plot of original data against rise and decay smoothed data.
     Implements strict memory management and local event loops to prevent RAM leaks.
     """
-    # Create figure using the object-oriented approach
     fig, ax = plt.subplots(figsize=(9, 7))
 
     ax.axhline(y=0.0, color="k", linestyle='--')
 
-    # Plot full resolution signals with slight transparency for readability
-    ax.plot(temp_rec.time, temp_rec.resp, "k", label="Original", alpha=0.75)
-
-    # Calculate the difference array once
-    diff = temp_rec.resp - temp_rec_smooth.resp
-    ax.plot(temp_rec.time, diff, "b", label="original - smoothed", alpha=0.6)
-
-    ax.plot(temp_rec_smooth.time, temp_rec_smooth.resp, "r", label="Smoothed", alpha=0.9)
+    # Signal traces
+    ax.plot(temp_rec.time, temp_rec.resp, "k", label="Original", alpha=0.6)
+    ax.plot(temp_smooth_rise.time, temp_smooth_rise.resp, "r", label="Smoothed (Rise)", alpha=0.85)
+    ax.plot(temp_smooth_decay.time, temp_smooth_decay.resp, "b", label="Smoothed (Decay)", alpha=0.85)
 
     ax.set_title(title)
     ax.legend(loc="upper right")
 
-    # 1. Show the window without triggering the global block
     plt.show(block=False)
     fig.canvas.draw()
 
-    # 2. Pass 'event' and use 'event.canvas' to avoid closure circular reference
     def on_close(event):
         event.canvas.stop_event_loop()
 
     cid = fig.canvas.mpl_connect('close_event', on_close)
-
-    # 3. Start Matplotlib's internal loop (Pauses script until window is closed)
     fig.canvas.start_event_loop(timeout=0)
 
-    # ---------------------------------------------------------
-    # SCORCHED EARTH RAM CLEARING
-    # ---------------------------------------------------------
+    # Scorch earth memory cleanup
     fig.canvas.mpl_disconnect(cid)
     fig.clear()
     plt.close(fig)
     plt.close('all')
 
-    # Explicitly delete the local variables holding the plot objects and arrays
-    del fig, ax, diff
+    del fig, ax
+    gc.collect()
 
-    # Force Python's Garbage Collector to reclaim RAM
+
+# def plot_smooth(temp_rec, temp_rec_smooth, title="Original versus smoothed recording."):
+#     """
+#     Displays a comparison plot of the original and smoothed data.
+#     Implements strict memory management and local event loops to prevent RAM leaks.
+#     """
+#     # Create figure using the object-oriented approach
+#     fig, ax = plt.subplots(figsize=(9, 7))
+#
+#     ax.axhline(y=0.0, color="k", linestyle='--')
+#
+#     # Plot full resolution signals with slight transparency for readability
+#     ax.plot(temp_rec.time, temp_rec.resp, "k", label="Original", alpha=0.75)
+#
+#     # Calculate the difference array once
+#     diff = temp_rec.resp - temp_rec_smooth.resp
+#     ax.plot(temp_rec.time, diff, "b", label="original - smoothed", alpha=0.6)
+#
+#     ax.plot(temp_rec_smooth.time, temp_rec_smooth.resp, "r", label="Smoothed", alpha=0.9)
+#
+#     ax.set_title(title)
+#     ax.legend(loc="upper right")
+#
+#     # 1. Show the window without triggering the global block
+#     plt.show(block=False)
+#     fig.canvas.draw()
+#
+#     # 2. Pass 'event' and use 'event.canvas' to avoid closure circular reference
+#     def on_close(event):
+#         event.canvas.stop_event_loop()
+#
+#     cid = fig.canvas.mpl_connect('close_event', on_close)
+#
+#     # 3. Start Matplotlib's internal loop (Pauses script until window is closed)
+#     fig.canvas.start_event_loop(timeout=0)
+#
+#     # ---------------------------------------------------------
+#     # SCORCHED EARTH RAM CLEARING
+#     # ---------------------------------------------------------
+#     fig.canvas.mpl_disconnect(cid)
+#     fig.clear()
+#     plt.close(fig)
+#     plt.close('all')
+#
+#     # Explicitly delete the local variables holding the plot objects and arrays
+#     del fig, ax, diff
+#
+#     # Force Python's Garbage Collector to reclaim RAM
+#     gc.collect()
+#
+
+def plot_adaptive_threshold(
+        temp_rec,
+        temp_smooth,
+        temp_der,
+        temp_sder,
+        sder_kr_sd,
+        diff_derv_g_conv_derv,
+        diff_sderv_g_conv_sderv,
+        frame_data,
+        run_const,
+        title="Adaptive Threshold Analysis"
+        ):
+    """
+    Displays 2x2 grid comparing smoothed vs raw responses and derivatives
+    alongside adaptive noise threshold trajectories.
+    """
+    fig, axs = plt.subplots(2, 2, figsize=(14, 8), sharex=True)
+    ax1, ax2 = axs[0, 0], axs[0, 1]
+    ax3, ax4 = axs[1, 0], axs[1, 1]
+
+    if title:
+        fig.suptitle(title, fontsize=14)
+
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.axhline(y=0.0, color='k', linestyle='dashed', linewidth=1, alpha=0.5)
+
+    # ---------------------------------------------------------
+    # BASELINE RAW VS SMOOTH PLOTS
+    # ---------------------------------------------------------
+    ax1.plot(temp_rec.time, temp_rec.resp, 'r', label="temp_rec.resp", alpha=0.5, linewidth=2)
+    ax1.plot(temp_smooth.time, temp_smooth.resp, 'k', label="temp_smooth.resp", linewidth=2)
+
+    ax2.plot(temp_rec.time, temp_rec.derivative, 'r', label="temp_rec.derivative", alpha=0.5, linewidth=2)
+    ax2.plot(temp_sder.time, temp_sder.resp, 'k', label="temp_sder.resp", linewidth=2)
+
+    # Transparency decrements across frame steps
+    alpha_var_smooth = 1.0
+    alpha_var_raw = 0.5
+    n_frames = len(frame_data)
+    decrement_smooth = alpha_var_smooth / n_frames if n_frames > 0 else 0
+    decrement_raw = alpha_var_raw / n_frames if n_frames > 0 else 0
+
+    # ---------------------------------------------------------
+    # DERIVATIVE ADAPTIVE THRESHOLDS (STATIC)
+    # ---------------------------------------------------------
+    ax2.plot(
+            temp_sder.time,
+            temp_sder.adaptive_sresp,
+            'b', alpha=alpha_var_smooth,
+            label=f"Frame={run_const['noise_smooth_frame_der']:3.3f} SD={sder_kr_sd:3.5f}"
+            )
+    ax2.legend(loc="lower right")
+    ax2.set_title("Derivative (temp_sder.resp)")
+
+    ax4.plot(temp_der.time, diff_derv_g_conv_derv, 'r', alpha=alpha_var_raw)
+    ax4.plot(
+            temp_sder.time,
+            diff_sderv_g_conv_sderv,
+            'k', alpha=alpha_var_smooth,
+            label=f"Frame={run_const['noise_smooth_frame_der']:3.3f} SD={sder_kr_sd:3.5f}"
+            )
+    ax4.plot(temp_sder.time, temp_sder.direction * temp_sder.interpolated_sd, 'g', alpha=alpha_var_smooth)
+    ax4.legend(loc="lower right")
+    ax4.set_title("temp_sder.resp - temp_sder.adaptive_sresp")
+    ax4.set_xlabel("Time")
+
+    # ---------------------------------------------------------
+    # RESPONSE FRAME INCREMENTS
+    # ---------------------------------------------------------
+    for data in frame_data:
+        frame = data["frame"]
+        smooth_kr_sd = data["smooth_kr_sd"]
+        adaptive_sresp = data["adaptive_sresp"]
+        interpolated_sd = data["interpolated_sd"]
+        diff_resp = data["diff_resp"]
+        diff_sresp = data["diff_sresp"]
+
+        ax1.plot(
+                temp_smooth.time,
+                adaptive_sresp,
+                'b', alpha=alpha_var_smooth,
+                label=f"Frame={frame:3.3f} SD={smooth_kr_sd:3.5f}"
+                )
+
+        ax3.plot(temp_rec.time, diff_resp, 'r', alpha=alpha_var_raw)
+        ax3.plot(
+                temp_smooth.time,
+                diff_sresp,
+                'k', alpha=alpha_var_smooth,
+                label=f"Frame={frame:3.3f} SD={smooth_kr_sd:3.5f}"
+                )
+        ax3.plot(temp_smooth.time, temp_smooth.direction * interpolated_sd, 'g', alpha=alpha_var_smooth)
+
+        alpha_var_smooth -= decrement_smooth
+        alpha_var_raw -= decrement_raw
+
+    ax1.legend(loc="lower right")
+    ax1.set_title("Response (temp_smooth.resp)")
+
+    ax3.legend(loc="lower right")
+    ax3.set_title("temp_smooth.resp - temp_smooth.adaptive_sresp")
+    ax3.set_xlabel("Time")
+
+    plt.tight_layout()
+
+    # ---------------------------------------------------------
+    # EVENT LOOP & RAM CLEARING
+    # ---------------------------------------------------------
+    plt.show(block=False)
+    fig.canvas.draw()
+
+    def on_close(event):
+        event.canvas.stop_event_loop()
+
+    cid = fig.canvas.mpl_connect('close_event', on_close)
+    fig.canvas.start_event_loop(timeout=0)
+
+    fig.canvas.mpl_disconnect(cid)
+    fig.clear()
+    plt.close(fig)
+    plt.close('all')
+    del fig, axs, ax1, ax2, ax3, ax4
     gc.collect()
 
 
@@ -409,14 +769,14 @@ class loadRecord(base):
         self.__dict__.update(self.data_object.__dict__)
         del self.data_object
 
-    # @timing
-    # def __copy__(self):
-    #     cls = self.__class__
-    #     result = cls.__new__(cls)
-    #     result.__dict__.update(self.__dict__)
-    #     cls.instance_number += 1
-    #     result._instance_number += 1
-    #     return result
+    @timing
+    def __copy__(self):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        cls.instance_number += 1
+        result._instance_number = cls.instance_number
+        return result
 
     @timing
     def __deepcopy__(self, memo):
@@ -697,14 +1057,20 @@ class Analyzer(Fourier):
         self.interpolated_sd = np.array([])  # Initialization
         self.adaptive_sresp = np.array([])  # Initialization
         self.peak_noise = np.array([])  # Initialization
-        self.der_peak_noise = np.array([])  # Initialization
+        self.der_peak_noise_rise = np.array([])  # Initialization
+        self.der_peak_noise_decay = np.array([])
         self.std = 0.0  # Initialization
         self.derivative = np.array([])  # Initialization
-        self.der_peaks = np.array([])  # Initialization
+        self.derivative_decay = np.array([])  # Initialization
+        self.der_peaks_rise = np.array([])  # Initialization
+        self.der_peaks_decay = np.array([])
         self.o_thresh = np.array([])  # Initialization
         self.peaks = np.array([])  # Initialization
         self.peak_boundaries = np.array([])  # Initialization
-        self.zero_pass = np.array([])  # Initialization
+        self.zero_pass_rise = np.array([])  # Initialization
+        self.zero_pass_decay = np.array([])
+        self.raw_zero_pass_rise = np.array([])
+        self.raw_zero_pass_decay = np.array([])
         self.inp_res = np.array([])  # Initialization
         self.mem_cap = np.array([])  # Initialization
         self.acc_res = np.array([])  # Initialization
@@ -923,7 +1289,7 @@ class Analyzer(Fourier):
         that directly flank valid peaks. Matches the farthest points from the peak,
         or locks exactly onto the point if the value is precisely 0.0.
         """
-        self.zero_pass = np.zeros(len(self.peaks))
+        self.zero_pass_rise = np.zeros(len(self.peaks))
 
         if not np.any(self.peaks) or not np.any(self.resp):
             return
@@ -981,9 +1347,9 @@ class Analyzer(Fourier):
         only_left = np.setdiff1d(unique_left, shared)
         only_right = np.setdiff1d(unique_right, shared)
 
-        self.zero_pass[only_left] = -1
-        self.zero_pass[only_right] = 1
-        self.zero_pass[shared] = 2  # 2 acts as a simultaneous 'End & Start'
+        self.zero_pass_rise[only_left] = -1
+        self.zero_pass_rise[only_right] = 1
+        self.zero_pass_rise[shared] = 2  # 2 acts as a simultaneous 'End & Start'
 
     @timing
     def get_rescap(
@@ -1141,26 +1507,23 @@ class Analyzer(Fourier):
                 self.iv_attrs[pos]["iv_res"] = current_ires
                 self.iv_attrs[pos]["iv_time"] = current_time
 
-    @timing
-    def align_slopes_to_zero_crossings(self) -> None:
+    @staticmethod
+    def _filter_peaks_by_zero_pass(der_peaks: np.ndarray, zero_pass: np.ndarray) -> np.ndarray:
         """
-        Refines self.der_peaks by retaining the slope peak with the maximum value
-        between each consecutive zero crossing pair (-1 and 1).
-        Uses a strict interval state machine to handle overlapping/duplicate zero-pass markers.
+        Core state machine: extracts strict [start, end] zero-pass intervals
+        and retains the maximum peak within each interval window.
         """
-        if not np.any(self.der_peaks) or not np.any(self.zero_pass):
-            self.der_peaks = np.zeros_like(self.der_peaks)
-            return
+        if not np.any(der_peaks) or not np.any(zero_pass):
+            return np.zeros_like(der_peaks)
 
         # 1. Safely extract strict [start, end] windows from zero_pass
-        zc_indices = np.where(self.zero_pass != 0)[0]
+        zc_indices = np.where(zero_pass != 0)[0]
         intervals = []
         in_event = False
         start_idx = 0
 
-        # This parses markers left-to-right, absorbing duplicate -1s or 1s
         for idx in zc_indices:
-            val = self.zero_pass[idx]
+            val = zero_pass[idx]
             if val == -1 and not in_event:
                 start_idx = idx
                 in_event = True
@@ -1175,58 +1538,311 @@ class Analyzer(Fourier):
 
         # Close the final event if the recording ended before a +1 marker
         if in_event:
-            intervals.append((start_idx, len(self.zero_pass) - 1))
+            intervals.append((start_idx, len(zero_pass) - 1))
 
-        # 2. Iterate through each strict window and isolate the maximum slope peak
-        new_der_peaks = np.zeros_like(self.der_peaks)
+        # 2. Isolate the maximum slope peak in each window
+        new_der_peaks = np.zeros_like(der_peaks)
 
         for start, end in intervals:
-            # Extract the actual values of der_peaks in this closed interval [start, end]
-            window = self.der_peaks[start:end + 1]
-
-            # Find local indices where a derivative peak actually exists
+            window = der_peaks[start:end + 1]
             local_peak_indices = np.where(window > 0)[0]
 
             if local_peak_indices.size > 0:
-                # Find the index of the max value among these candidates
                 best_local_idx = local_peak_indices[np.argmax(window[local_peak_indices])]
-
-                # Map back to global index and store the exact value
                 global_idx = start + best_local_idx
-                new_der_peaks[global_idx] = self.der_peaks[global_idx]
+                new_der_peaks[global_idx] = der_peaks[global_idx]
 
-        # 3. Normalize array to strictly 1.0 and 0.0
-        # self.der_peaks = np.where(new_der_peaks > 0.0, 1.0, 0.0)
-        self.der_peaks = new_der_peaks
+        return new_der_peaks
 
     @timing
-    def align_peaks_to_slopes(self) -> None:
+    def align_slopes_to_zero_crossings(self, phase: str = "both") -> None:
         """
-        Aligns peaks and slopes by identifying combined overlapping intervals.
-        Selects the maximum peak per interval, the maximum slope before it,
+        Refines slope peaks (rise, decay, or both) by retaining the maximum peak
+        value between each consecutive zero crossing pair (-1 and 1).
+
+        Parameters
+        ----------
+        phase : str, optional
+            Target phase to align: 'rise', 'decay', or 'both' (default is 'both').
+        """
+        phase = phase.lower()
+
+        if phase in ("rise", "both"):
+            if hasattr(self, "der_peaks_rise") and hasattr(self, "zero_pass_rise"):
+                self.der_peaks_rise = self._filter_peaks_by_zero_pass(
+                        self.der_peaks_rise, self.zero_pass_rise
+                        )
+
+        if phase in ("decay", "both"):
+            if hasattr(self, "der_peaks_decay") and hasattr(self, "zero_pass_decay"):
+                self.der_peaks_decay = self._filter_peaks_by_zero_pass(
+                        self.der_peaks_decay, self.zero_pass_decay
+                        )
+
+    # @timing
+    # def align_slopes_to_zero_crossings(self) -> None:
+    #     """
+    #     Refines self.der_peaks by retaining the slope peak with the maximum value
+    #     between each consecutive zero crossing pair (-1 and 1).
+    #     Uses a strict interval state machine to handle overlapping/duplicate zero-pass markers.
+    #     """
+    #     if not np.any(self.der_peaks_rise) or not np.any(self.zero_pass_rise):
+    #         self.der_peaks_rise = np.zeros_like(self.der_peaks_rise)
+    #         return
+    #
+    #     # 1. Safely extract strict [start, end] windows from zero_pass
+    #     zc_indices = np.where(self.zero_pass_rise != 0)[0]
+    #     intervals = []
+    #     in_event = False
+    #     start_idx = 0
+    #
+    #     # This parses markers left-to-right, absorbing duplicate -1s or 1s
+    #     for idx in zc_indices:
+    #         val = self.zero_pass_rise[idx]
+    #         if val == -1 and not in_event:
+    #             start_idx = idx
+    #             in_event = True
+    #         elif val == 1 and in_event:
+    #             intervals.append((start_idx, idx))
+    #             in_event = False
+    #         elif val == 2:
+    #             if in_event:
+    #                 intervals.append((start_idx, idx))  # Close previous event
+    #             start_idx = idx  # Immediately open new event
+    #             in_event = True
+    #
+    #     # Close the final event if the recording ended before a +1 marker
+    #     if in_event:
+    #         intervals.append((start_idx, len(self.zero_pass_rise) - 1))
+    #
+    #     # 2. Iterate through each strict window and isolate the maximum slope peak
+    #     new_der_peaks = np.zeros_like(self.der_peaks_rise)
+    #
+    #     for start, end in intervals:
+    #         # Extract the actual values of der_peaks in this closed interval [start, end]
+    #         window = self.der_peaks_rise[start:end + 1]
+    #
+    #         # Find local indices where a derivative peak actually exists
+    #         local_peak_indices = np.where(window > 0)[0]
+    #
+    #         if local_peak_indices.size > 0:
+    #             # Find the index of the max value among these candidates
+    #             best_local_idx = local_peak_indices[np.argmax(window[local_peak_indices])]
+    #
+    #             # Map back to global index and store the exact value
+    #             global_idx = start + best_local_idx
+    #             new_der_peaks[global_idx] = self.der_peaks_rise[global_idx]
+    #
+    #     # 3. Normalize array to strictly 1.0 and 0.0
+    #     # self.der_peaks = np.where(new_der_peaks > 0.0, 1.0, 0.0)
+    #     self.der_peaks_rise = new_der_peaks
+
+    # def _extract_slope_intervals(
+    #         self, sig_len: int, zero_pass: np.ndarray, der_peaks: np.ndarray
+    #         ) -> list[tuple[int, int]]:
+    #     """Parses zero-crossings into discrete slope windows [start, end]."""
+    #     slope_intervals = []
+    #     if np.any(zero_pass):
+    #         zc_indices = np.where(zero_pass != 0)[0]
+    #         in_event = False
+    #         start_idx = 0
+    #
+    #         for idx in zc_indices:
+    #             val = zero_pass[idx]
+    #             if val == -1 and not in_event:
+    #                 start_idx = idx
+    #                 in_event = True
+    #             elif val == 1 and in_event:
+    #                 slope_intervals.append((start_idx, idx))
+    #                 in_event = False
+    #             elif val == 2:
+    #                 if in_event:
+    #                     slope_intervals.append((start_idx, idx))
+    #                 start_idx = idx
+    #                 in_event = True
+    #
+    #         if in_event:
+    #             slope_intervals.append((start_idx, sig_len - 1))
+    #     else:
+    #         ms_idx = np.where(der_peaks > 0)[0]
+    #         for slope_idx in ms_idx:
+    #             slope_intervals.append((slope_idx, slope_idx))
+    #
+    #     return slope_intervals
+    #
+    # def _clear_all_attributes(self) -> None:
+    #     """Wipes all peak, derivative, boundary, and zero-pass attributes."""
+    #     self.peaks = np.zeros_like(self.peaks)
+    #     self.der_peaks_rise = np.zeros_like(self.der_peaks_rise)
+    #     self.zero_pass_rise = np.zeros_like(self.zero_pass_rise)
+    #     self.der_peaks_decay = np.zeros_like(self.der_peaks_decay)
+    #     self.zero_pass_decay = np.zeros_like(self.zero_pass_decay)
+    #     self.peak_boundaries = []
+    #
+    # @timing
+    # def align_peaks_to_slopes(self) -> None:
+    #     """
+    #     Symmetrically aligns response peaks with rise and decay slopes.
+    #     Retains an event if and only if a response peak overlaps with BOTH
+    #     a valid rise slope and a valid decay slope.
+    #     """
+    #     if (
+    #             not np.any(self.peaks)
+    #             or not np.any(self.der_peaks_rise)
+    #             or not np.any(self.der_peaks_decay)
+    #             or not self.peak_boundaries
+    #     ):
+    #         self._clear_all_attributes()
+    #         return
+    #
+    #     sig_len = len(self.peaks)
+    #
+    #     # 1. Precompute Rise Slopes ONCE
+    #     rise_intervals = self._extract_slope_intervals(
+    #             sig_len, self.zero_pass_rise, self.der_peaks_rise
+    #             )
+    #     precomputed_rise = []
+    #     for r_start, r_end in rise_intervals:
+    #         r_indices = np.where(self.der_peaks_rise[r_start: r_end + 1] > 0)[0] + r_start
+    #         if r_indices.size > 0:
+    #             r_peak_idx = r_indices[np.argmax(self.der_peaks_rise[r_indices])]
+    #             precomputed_rise.append((r_start, r_end, r_peak_idx, self.der_peaks_rise[r_peak_idx]))
+    #
+    #     # 2. Precompute Decay Slopes ONCE
+    #     decay_intervals = self._extract_slope_intervals(
+    #             sig_len, self.zero_pass_decay, self.der_peaks_decay
+    #             )
+    #     precomputed_decay = []
+    #     for d_start, d_end in decay_intervals:
+    #         d_indices = np.where(self.der_peaks_decay[d_start: d_end + 1] > 0)[0] + d_start
+    #         if d_indices.size > 0:
+    #             d_peak_idx = d_indices[np.argmax(self.der_peaks_decay[d_indices])]
+    #             precomputed_decay.append((d_start, d_end, d_peak_idx, self.der_peaks_decay[d_peak_idx]))
+    #
+    #     if not precomputed_rise or not precomputed_decay:
+    #         self._clear_all_attributes()
+    #         return
+    #
+    #     # 3. Commutative Intersection Evaluation
+    #     valid_events = []
+    #
+    #     for p_idx, p_start, p_end in self.peak_boundaries:
+    #         # Evaluate Rise Overlap
+    #         best_r_val, best_r_idx, best_r_interval = -1.0, -1, None
+    #         for r_start, r_end, r_peak_idx, r_val in precomputed_rise:
+    #             if max(p_start, r_peak_idx) <= min(p_idx, r_end):
+    #                 if r_val > best_r_val:
+    #                     best_r_val, best_r_idx, best_r_interval = r_val, r_peak_idx, (r_start, r_end)
+    #
+    #         if best_r_idx == -1:
+    #             continue
+    #
+    #         # Evaluate Decay Overlap
+    #         best_d_val, best_d_idx, best_d_interval = -1.0, -1, None
+    #         for d_start, d_end, d_peak_idx, d_val in precomputed_decay:
+    #             if max(p_idx, d_start) <= min(p_end, d_peak_idx):
+    #                 if d_val > best_d_val:
+    #                     best_d_val, best_d_idx, best_d_interval = d_val, d_peak_idx, (d_start, d_end)
+    #
+    #         if best_d_idx == -1:
+    #             continue
+    #
+    #         valid_events.append(
+    #                 (p_idx, p_start, p_end, best_r_idx, best_r_interval, best_d_idx, best_d_interval)
+    #                 )
+    #
+    #     if not valid_events:
+    #         self._clear_all_attributes()
+    #         return
+    #
+    #     # 4. Spatial Island Grouping
+    #     combined_mask = np.zeros(sig_len, dtype=bool)
+    #     for _, p_start, p_end, _, _, _, _ in valid_events:
+    #         combined_mask[p_start: p_end + 1] = True
+    #
+    #     padded = np.zeros(sig_len + 2, dtype=bool)
+    #     padded[1:-1] = combined_mask
+    #     changes = np.diff(padded.astype(int))
+    #
+    #     island_starts = np.where(changes == 1)[0]
+    #     island_ends = np.where(changes == -1)[0]
+    #
+    #     surviving_peaks, surviving_rise_slopes, surviving_decay_slopes = [], [], []
+    #     surviving_rise_intervals, surviving_decay_intervals = [], []
+    #
+    #     for i_start, i_end in zip(island_starts, island_ends):
+    #         island_candidates = [ev for ev in valid_events if i_start <= ev[0] < i_end]
+    #         if island_candidates:
+    #             winner = max(island_candidates, key=lambda ev: self.peaks[ev[0]])
+    #             p_idx, _, _, r_idx, r_int, d_idx, d_int = winner
+    #
+    #             surviving_peaks.append(p_idx)
+    #             surviving_rise_slopes.append(r_idx)
+    #             surviving_decay_slopes.append(d_idx)
+    #             surviving_rise_intervals.append(r_int)
+    #             surviving_decay_intervals.append(d_int)
+    #
+    #     # 5. Direct Attribute Updates
+    #     new_peaks = np.zeros_like(self.peaks)
+    #     new_peaks[surviving_peaks] = self.peaks[surviving_peaks]
+    #     self.peaks = new_peaks
+    #
+    #     new_der_rise = np.zeros_like(self.der_peaks_rise)
+    #     new_der_rise[surviving_rise_slopes] = self.der_peaks_rise[surviving_rise_slopes]
+    #     self.der_peaks_rise = new_der_rise
+    #
+    #     new_der_decay = np.zeros_like(self.der_peaks_decay)
+    #     new_der_decay[surviving_decay_slopes] = self.der_peaks_decay[surviving_decay_slopes]
+    #     self.der_peaks_decay = new_der_decay
+    #
+    #     surviving_peak_set = set(surviving_peaks)
+    #     self.peak_boundaries = [b for b in self.peak_boundaries if b[0] in surviving_peak_set]
+    #
+    #     new_zp_rise = np.zeros_like(self.zero_pass_rise)
+    #     for r_start, r_end in surviving_rise_intervals:
+    #         new_zp_rise[r_start] = self.zero_pass_rise[r_start]
+    #         new_zp_rise[r_end] = self.zero_pass_rise[r_end]
+    #     self.zero_pass_rise = new_zp_rise
+    #
+    #     new_zp_decay = np.zeros_like(self.zero_pass_decay)
+    #     for d_start, d_end in surviving_decay_intervals:
+    #         new_zp_decay[d_start] = self.zero_pass_decay[d_start]
+    #         new_zp_decay[d_end] = self.zero_pass_decay[d_end]
+    #     self.zero_pass_decay = new_zp_decay
+    @timing
+    def align_peaks_to_slopes_decay(self) -> None:
+        """
+        Aligns peaks and decay slopes by identifying combined overlapping intervals.
+        Selects the maximum peak per interval, the maximum decay slope after it,
         and filters boundaries and zero crossings to strictly match the survivors.
         """
-        if not np.any(self.peaks) or not np.any(self.der_peaks) or not self.peak_boundaries:
+        if (
+                not np.any(self.peaks)
+                or not np.any(self.der_peaks_decay)
+                or not self.peak_boundaries
+        ):
             self.peaks = np.zeros_like(self.peaks)
-            self.der_peaks = np.zeros_like(self.der_peaks)
+            self.der_peaks_decay = np.zeros_like(self.der_peaks_decay)
             self.peak_boundaries = []
-            if hasattr(self, 'zero_pass'):
-                self.zero_pass = np.zeros_like(self.zero_pass)
+            self.zero_pass_decay = np.zeros_like(self.zero_pass_decay)
             return
 
         sig_len = len(self.peaks)
 
         # ---------------------------------------------------------
-        # 1. Extract Slope Intervals using State Machine
+        # 1. Extract Decay Slope Intervals using State Machine
         # ---------------------------------------------------------
         slope_intervals = []
-        if np.any(self.zero_pass):
-            zc_indices = np.where(self.zero_pass != 0)[0]
+        # Use raw, unmutated zero passes to preserve state machine syntax across multiple calls
+        source_zero_pass = getattr(self, "raw_zero_pass_decay", self.zero_pass_decay)
+
+        if np.any(source_zero_pass):
+            zc_indices = np.where(source_zero_pass != 0)[0]
             in_event = False
             start_idx = 0
 
             for idx in zc_indices:
-                val = self.zero_pass[idx]
+                val = source_zero_pass[idx]
                 if val == -1 and not in_event:
                     start_idx = idx
                     in_event = True
@@ -1242,9 +1858,176 @@ class Analyzer(Fourier):
             if in_event:
                 slope_intervals.append((start_idx, sig_len - 1))
         else:
-            ms_idx = np.where(self.der_peaks > 0)[0]
+            ms_idx = np.where(self.der_peaks_decay > 0)[0]
             for slope_idx in ms_idx:
                 slope_intervals.append((slope_idx, slope_idx))
+        # ---------------------------------------------------------
+        # 2. Build the Base Regional Masks & Find Overlaps
+        # ---------------------------------------------------------
+        peak_mask = np.zeros(sig_len, dtype=bool)
+        for p_idx, p_start, p_end in self.peak_boundaries:
+            # ONLY mask the response decay: peak to end
+            peak_mask[p_idx: p_end + 1] = True
+
+        slope_mask = np.zeros(sig_len, dtype=bool)
+        slope_rises = []  # Cache the slope rise regions (start to derivative peak)
+
+        for start, end in slope_intervals:
+            # Find the peak of the decay slope inside this zero-cross interval
+            s_indices = np.where(self.der_peaks_decay[start: end + 1] > 0)[0] + start
+            if s_indices.size > 0:
+                s_peak_idx = s_indices[np.argmax(self.der_peaks_decay[s_indices])]
+                slope_rises.append((start, s_peak_idx))
+
+                # ONLY mask the decay slope rise phase: start to derivative peak
+                slope_mask[start: s_peak_idx + 1] = True
+
+        overlap_mask = peak_mask & slope_mask
+
+        # ---------------------------------------------------------
+        # 3. Construct the Combined Event Footprint Mask
+        # ---------------------------------------------------------
+        combined_event_mask = np.zeros(sig_len, dtype=bool)
+
+        for p_idx, p_start, p_end in self.peak_boundaries:
+            # Check overlap and build island strictly using the decay region
+            if np.any(overlap_mask[p_idx: p_end + 1]):
+                # Shift end by 1 to prevent fusing at the shared right boundary
+                safe_end = p_end - 1 if p_end > p_idx else p_end
+                combined_event_mask[p_idx: safe_end + 1] = True
+
+        for start, s_peak_idx in slope_rises:
+            # Check overlap and build island strictly using the slope rise region
+            if np.any(overlap_mask[start: s_peak_idx + 1]):
+                # Shift start by 1 to prevent fusing at the shared left boundary
+                safe_start = start + 1 if start < s_peak_idx else start
+                combined_event_mask[safe_start: s_peak_idx + 1] = True
+
+        # ---------------------------------------------------------
+        # 4. Find Contiguous Islands of the Combined Mask
+        # ---------------------------------------------------------
+        padded = np.zeros(sig_len + 2, dtype=bool)
+        padded[1:-1] = combined_event_mask
+        changes = np.diff(padded.astype(int))
+
+        island_starts = np.where(changes == 1)[0]
+        island_ends = np.where(changes == -1)[0]
+
+        # ---------------------------------------------------------
+        # 5. Iterate Through Intervals and Select Winners
+        # ---------------------------------------------------------
+        best_peaks = []
+        best_slopes = []
+
+        for start, end in zip(island_starts, island_ends):
+            peak_indices = np.where(self.peaks[start:end] > 0)[0] + start
+
+            if peak_indices.size > 0:
+                max_p_idx = peak_indices[np.argmax(self.peaks[peak_indices])]
+                best_peaks.append(max_p_idx)
+
+                # Search strictly AFTER or AT the response peak up to the island end
+                slope_indices = (
+                        np.where(self.der_peaks_decay[max_p_idx:end] > 0)[0] + max_p_idx
+                )
+
+                if slope_indices.size > 0:
+                    max_s_idx = slope_indices[
+                        np.argmax(self.der_peaks_decay[slope_indices])
+                    ]
+                    best_slopes.append(max_s_idx)
+
+        # ---------------------------------------------------------
+        # 6. Reconstruct the Target Arrays
+        # ---------------------------------------------------------
+        new_peaks = np.zeros_like(self.peaks)
+        if best_peaks:
+            new_peaks[best_peaks] = self.peaks[best_peaks]
+        self.peaks = new_peaks
+
+        new_der_peaks = np.zeros_like(self.der_peaks_decay)
+        if best_slopes:
+            new_der_peaks[best_slopes] = self.der_peaks_decay[best_slopes]
+        self.der_peaks_decay = new_der_peaks
+
+        # ---------------------------------------------------------
+        # 7. Clean up Boundaries
+        # ---------------------------------------------------------
+        valid_peak_set = set(best_peaks)
+        self.peak_boundaries = [
+                b for b in self.peak_boundaries if b[0] in valid_peak_set
+                ]
+
+        # ---------------------------------------------------------
+        # 8. Clean up Zero Passes
+        # ---------------------------------------------------------
+        new_zero_pass = np.zeros_like(self.zero_pass_decay)
+        if best_slopes and slope_intervals:
+            best_slopes_arr = np.array(best_slopes)
+            slope_starts = np.array([s for s, e in slope_intervals])
+            slope_ends = np.array([e for s, e in slope_intervals])
+
+            # Map surviving slopes back to their decay zero-cross interval
+            interval_idx = np.searchsorted(slope_ends, best_slopes_arr)
+
+            valid_mask = (interval_idx < len(slope_starts)) & (
+                    slope_starts[interval_idx] <= best_slopes_arr
+            )
+
+            valid_interval_idx = interval_idx[valid_mask]
+            valid_starts = slope_starts[valid_interval_idx]
+            valid_ends = slope_ends[valid_interval_idx]
+
+            # Restore original zero-crossing values directly from source_zero_pass
+            new_zero_pass[valid_starts] = source_zero_pass[valid_starts]
+            new_zero_pass[valid_ends] = source_zero_pass[valid_ends]
+
+        self.zero_pass_decay = new_zero_pass
+
+    @timing
+    def align_peaks_to_slopes_rise(self) -> None:
+        """
+        Aligns peaks and slopes by identifying combined overlapping intervals.
+        Selects the maximum peak per interval, the maximum slope before it,
+        and filters boundaries and zero crossings to strictly match the survivors.
+        """
+        if not np.any(self.peaks) or not np.any(self.der_peaks_rise) or not self.peak_boundaries:
+            self.peaks = np.zeros_like(self.peaks)
+            self.der_peaks_rise = np.zeros_like(self.der_peaks_rise)
+            self.peak_boundaries = []
+            self.zero_pass_rise = np.zeros_like(self.zero_pass_rise)
+            return
+
+        sig_len = len(self.peaks)
+
+        # ---------------------------------------------------------
+        # 1. Extract Slope Intervals using State Machine
+        # ---------------------------------------------------------
+        slope_intervals = []
+        # Use raw, unmutated zero passes to preserve state machine syntax across multiple calls
+        source_zero_pass = getattr(self, "raw_zero_pass_rise", self.zero_pass_rise)
+
+        if np.any(source_zero_pass):
+            zc_indices = np.where(source_zero_pass != 0)[0]
+            in_event = False
+            start_idx = 0
+
+            for idx in zc_indices:
+                val = source_zero_pass[idx]
+                if val == -1 and not in_event:
+                    start_idx = idx
+                    in_event = True
+                elif val == 1 and in_event:
+                    slope_intervals.append((start_idx, idx))
+                    in_event = False
+                elif val == 2:
+                    if in_event:
+                        slope_intervals.append((start_idx, idx))
+                    start_idx = idx
+                    in_event = True
+
+            if in_event:
+                slope_intervals.append((start_idx, sig_len - 1))
 
         # ---------------------------------------------------------
         # 2. Build the Base Regional Masks & Find Overlaps
@@ -1259,9 +2042,9 @@ class Analyzer(Fourier):
 
         for start, end in slope_intervals:
             # Find the peak of the slope inside this specific zero-cross interval
-            s_indices = np.where(self.der_peaks[start:end + 1] > 0)[0] + start
+            s_indices = np.where(self.der_peaks_rise[start:end + 1] > 0)[0] + start
             if s_indices.size > 0:
-                s_peak_idx = s_indices[np.argmax(self.der_peaks[s_indices])]
+                s_peak_idx = s_indices[np.argmax(self.der_peaks_rise[s_indices])]
                 slope_decays.append((s_peak_idx, end))
 
                 # ONLY mask the slope decay: peak to end
@@ -1312,11 +2095,11 @@ class Analyzer(Fourier):
                 best_peaks.append(max_p_idx)
 
                 # ADDED '+ 1' to include the peak index itself in case they happen simultaneously
-                slope_indices = np.where(self.der_peaks[start:max_p_idx + 1] > 0)[0] + start
+                slope_indices = np.where(self.der_peaks_rise[start:max_p_idx + 1] > 0)[0] + start
 
                 # RESTORED defensive check to prevent np.argmax() from crashing on empty arrays
                 if slope_indices.size > 0:
-                    max_s_idx = slope_indices[np.argmax(self.der_peaks[slope_indices])]
+                    max_s_idx = slope_indices[np.argmax(self.der_peaks_rise[slope_indices])]
                     best_slopes.append(max_s_idx)
 
         # ---------------------------------------------------------
@@ -1327,10 +2110,10 @@ class Analyzer(Fourier):
             new_peaks[best_peaks] = self.peaks[best_peaks]
         self.peaks = new_peaks
 
-        new_der_peaks = np.zeros_like(self.der_peaks)
+        new_der_peaks = np.zeros_like(self.der_peaks_rise)
         if best_slopes:
-            new_der_peaks[best_slopes] = self.der_peaks[best_slopes]
-        self.der_peaks = new_der_peaks
+            new_der_peaks[best_slopes] = self.der_peaks_rise[best_slopes]
+        self.der_peaks_rise = new_der_peaks
 
         # ---------------------------------------------------------
         # 7. Clean up Boundaries
@@ -1343,7 +2126,7 @@ class Analyzer(Fourier):
         # ---------------------------------------------------------
         # 8. Clean up Zero Passes
         # ---------------------------------------------------------
-        new_zero_pass = np.zeros_like(self.zero_pass)
+        new_zero_pass = np.zeros_like(self.zero_pass_rise)
         if best_slopes and slope_intervals:
             best_slopes_arr = np.array(best_slopes)
             slope_starts = np.array([s for s, e in slope_intervals])
@@ -1360,10 +2143,20 @@ class Analyzer(Fourier):
             valid_ends = slope_ends[valid_interval_idx]
 
             # Keep only the original zero passes that bounded the surviving slopes
-            new_zero_pass[valid_starts] = self.zero_pass[valid_starts]
-            new_zero_pass[valid_ends] = self.zero_pass[valid_ends]
+            new_zero_pass[valid_starts] = source_zero_pass[valid_starts]
+            new_zero_pass[valid_ends] = source_zero_pass[valid_ends]
 
-        self.zero_pass = new_zero_pass
+        self.zero_pass_rise = new_zero_pass
+
+    @timing
+    def align_peaks_to_slopes(self) -> None:
+        # Save unmutated originals ONCE before running alignment passes
+        self.raw_zero_pass_rise = self.zero_pass_rise.copy()
+        self.raw_zero_pass_decay = self.zero_pass_decay.copy()
+        # This needs to be sequential
+        self.align_peaks_to_slopes_rise()
+        self.align_peaks_to_slopes_decay()
+        self.align_peaks_to_slopes_rise()
 
     @timing
     def get_pulse_arr(self, name):
@@ -1387,6 +2180,7 @@ class EvtPro(Analyzer):
                 "p_segm"          : None,  # peak segment, where the peak is located
                 "d_segm"          : None,  # derivative segment
                 "s_segm"          : None,  # max slope location
+                "sd_segm"         : None,  # max decay slope location
                 "z_segm"          : None,  # zero pass locations, critical points
                 "b_amp"           : None,  # Baseline amplitude
                 "amplitude"       : None,  # Absolute amplitude of the response
@@ -1403,7 +2197,8 @@ class EvtPro(Analyzer):
                 "threshold_segm"  : None,  # threshold segment
                 "ap_threshold"    : None,  # threshold value
                 # --- Newly Added Keys (From screen_events logic) ---
-                "rise_slope_val"  : None,  # Upstroke velocity value used in constraints
+                "rise_slope_val"  : None,  # RISE velocity value used in constraints
+                "decay_slope_val" : None,  # DECAY velocity value used in constraints
                 "peak_error"      : None,  # Deviation between original peak time and zero-pass peak time
                 "rise_time_peak"  : None,  # Activation rise time (original peak time - zero pass start)
                 "rise_time_der"   : None,
@@ -1426,14 +2221,43 @@ class EvtPro(Analyzer):
         Handles cleanup, metrics tracking, and logging for rejected events
         across the entire processing pipeline.
         """
-        if msg:
-            print(msg)
+        # 1. Calculate and cache the file path on the first call
+        if not hasattr(self, '_rejection_log_path'):
+            # Pass `self` (the EvtPro instance) and `__file__` (the current script)
+            file_name, _, file_parent, script_name = get_names(self, __file__)
+            csv_filename = f"{file_name}_{script_name}_rejected_events.csv"
+            self._rejection_log_path = os.path.join(file_parent, csv_filename)
 
-        # Track the rejection reason globally
+        log_file = self._rejection_log_path
+
+        # 2. Check if file exists to write headers on the first pass
+        file_exists = os.path.isfile(log_file)
+
+        # 3. Append the rejection data to the CSV
+        with open(log_file, mode="a", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(["Event_Time", "Reason", "Message"])
+            writer.writerow([evt_time, reason, msg])
+
+        # 4. Track the rejection reason globally
         self.rejected_counts[reason] = self.rejected_counts.get(reason, 0) + 1
 
-        # Evict the event from the main dictionary using its absolute time key
+        # 5. Evict the event from the main dictionary using its absolute time key
         self.events_attrs.pop(evt_time, None)
+    # def _reject_event(self, evt_time: float, reason: str, msg: str = ""):
+    #     """
+    #     Handles cleanup, metrics tracking, and logging for rejected events
+    #     across the entire processing pipeline.
+    #     """
+    #     if msg:
+    #         print(msg)
+    #
+    #     # Track the rejection reason globally
+    #     self.rejected_counts[reason] = self.rejected_counts.get(reason, 0) + 1
+    #
+    #     # Evict the event from the main dictionary using its absolute time key
+    #     self.events_attrs.pop(evt_time, None)
 
     @timing
     def _select_events(self):
@@ -1441,7 +2265,7 @@ class EvtPro(Analyzer):
         Extracts foundational kinetic properties for detected peaks and initializes valid putative events.
 
         Iterates over all identified peak indices, utilizing the interval between consecutive
-        peaks to define regional boundaries. Isolates the maximum rising slope,
+        peaks to define regional boundaries. Isolates the maximum rising and decay slopes,
         calculates the absolute start time of the event rise, and refines the peak location.
         """
         self.events_attrs = {}
@@ -1456,40 +2280,58 @@ class EvtPro(Analyzer):
             return
 
         # 2. Extract marker indices ONCE for fast bounded lookups
-        slope_indices = np.where(self.der_peaks > 0)[0]
-        zc_indices = np.where(self.zero_pass != 0)[0]  # Restored to match crossing_point (!= 0) behavior
+        slope_indices = np.where(self.der_peaks_rise > 0)[0]
+        decay_slope_indices = np.where(self.der_peaks_decay > 0)[0]
+        zc_indices = np.where(self.zero_pass_rise != 0)[0]
 
         for i in range(num_peaks):
             evt_pos = peak_indices[i]
             evt_time = float(self.time[evt_pos])
 
-            # Define regional boundaries exactly as before
+            # Define regional boundaries
             prev_pos = peak_indices[i - 1] if i > 0 else 0
             next_pos = peak_indices[i + 1] if i < num_peaks - 1 else len(self.time) - 1
 
             # ---------------------------------------------------------
-            # 1. Restored Bounded Slope Lookup
-            # Equivalent to: np.where(self.der_peaks[prev_pos:evt_pos + 1] > 0)
+            # 1. Bounded Rise Slope Lookup
             # ---------------------------------------------------------
-            s_start = np.searchsorted(slope_indices, prev_pos, side='left')
-            s_end = np.searchsorted(slope_indices, evt_pos, side='right')
+            s_start = np.searchsorted(slope_indices, prev_pos, side="left")
+            s_end = np.searchsorted(slope_indices, evt_pos, side="right")
 
             if s_start == s_end:
                 msg = f"{evt_time:12.4f}[s] rejected (No slope found in region)"
                 self._reject_event(evt_time, "no_slope_region", msg)
                 continue
 
-            abs_slope_pos = slope_indices[s_end - 1]  # [-1] grabs the exact same slope as the old code
+            abs_slope_pos = slope_indices[s_end - 1]
             slope_value = float(self.derivative[abs_slope_pos])
             slope_time = float(self.time[abs_slope_pos])
 
             # ---------------------------------------------------------
-            # 2. Restored Bounded Zero-Crossings Lookup
+            # 2. Bounded Decay Slope Lookup
             # ---------------------------------------------------------
-            # zs_p equivalent: Find the LAST non-zero pass in [max(0, prev_pos - 1), abs_slope_pos]
+            sd_start = np.searchsorted(decay_slope_indices, evt_pos, side="left")
+            sd_end = np.searchsorted(decay_slope_indices, next_pos, side="right")
+
+            if sd_start == sd_end:
+                msg = (
+                        f"{evt_time:12.4f}[s] rejected (No decay slope found in region)"
+                )
+                self._reject_event(evt_time, "no_decay_slope_region", msg)
+                continue
+
+            abs_decay_slope_pos = decay_slope_indices[
+                sd_start
+            ]  # First decay slope after peak
+            decay_slope_value = float(self.derivative_decay[abs_decay_slope_pos])
+            decay_slope_time = float(self.time[abs_decay_slope_pos])
+
+            # ---------------------------------------------------------
+            # 3. Bounded Zero-Crossings Lookup
+            # ---------------------------------------------------------
             zs_limit = max(0, prev_pos - 1)
-            zc_s_start = np.searchsorted(zc_indices, zs_limit, side='left')
-            zc_s_end = np.searchsorted(zc_indices, abs_slope_pos, side='right')
+            zc_s_start = np.searchsorted(zc_indices, zs_limit, side="left")
+            zc_s_end = np.searchsorted(zc_indices, abs_slope_pos, side="right")
 
             if zc_s_start == zc_s_end:
                 msg = f"{evt_time:12.4f}[s] rejected (crossings not found)"
@@ -1498,9 +2340,8 @@ class EvtPro(Analyzer):
 
             abs_zs_pos = zc_indices[zc_s_end - 1]
 
-            # zp_p equivalent: Find the FIRST non-zero pass in [abs_slope_pos, next_pos]
-            zc_p_start = np.searchsorted(zc_indices, abs_slope_pos, side='left')
-            zc_p_end = np.searchsorted(zc_indices, next_pos, side='right')
+            zc_p_start = np.searchsorted(zc_indices, abs_slope_pos, side="left")
+            zc_p_end = np.searchsorted(zc_indices, next_pos, side="right")
 
             if zc_p_start == zc_p_end:
                 msg = f"{evt_time:12.4f}[s] rejected (crossings not found)"
@@ -1510,7 +2351,7 @@ class EvtPro(Analyzer):
             abs_zp_pos = zc_indices[zc_p_start]
 
             # ---------------------------------------------------------
-            # 3. Direct Absolute Assignment
+            # 4. Direct Absolute Assignment
             # ---------------------------------------------------------
             t_o_zs = float(self.time[abs_zs_pos])
             t_o_zp = float(self.time[abs_zp_pos])
@@ -1519,17 +2360,21 @@ class EvtPro(Analyzer):
             self.events_attrs[evt_time].update(
                     {
                             "t_o_s"                : slope_time,
+                            "t_o_sd"               : decay_slope_time,
                             "slope_peak_delta_time": evt_time - slope_time,
                             "rise_slope_val"       : slope_value,
+                            "decay_slope_val"      : decay_slope_value,
                             "t_o_zs"               : t_o_zs,
                             "t_o_zp"               : t_o_zp,
                             "peak_error_time"      : evt_time - t_o_zp,
                             "rise_time_peak"       : evt_time - t_o_zs,
-                            "rise_time_der"        : t_o_zp - t_o_zs
+                            "rise_time_der"        : t_o_zp - t_o_zs,
                             }
                     )
 
-        print(f" Accepted events: {len(self.events_attrs)}, Rejected: {num_peaks - len(self.events_attrs)}")
+        print(
+                f" Accepted events: {len(self.events_attrs)}, Rejected: {num_peaks - len(self.events_attrs)}"
+                )
 
     @timing
     def _event_sections(self, t_aft, baseline_time, peak_to_peak=0.001):
@@ -1540,9 +2385,10 @@ class EvtPro(Analyzer):
         evt_times_list = list(self.events_attrs.keys())
         total_initial_events = len(evt_times_list)
 
-        # Pre-extract global event times to eliminate O(N) slicing inside the loop
         peak_times = self.time[self.peaks > 0]
-        pulse_times = self.time[self.pulses_peaks > 0] if self.cdac.size else np.array([])
+        pulse_times = (
+                self.time[self.pulses_peaks > 0] if self.cdac.size else np.array([])
+        )
 
         for i, evt_time in enumerate(evt_times_list):
             # =========================================================
@@ -1554,31 +2400,38 @@ class EvtPro(Analyzer):
             else:
                 next_evt_start_time = float(self.time[-1])
 
-            # Fast binary lookup for trailing peaks (interferences)
-            # Replaces: decay_peaks_idx = np.where(decay_peaks > 0)[0]
-            p_idx = np.searchsorted(peak_times, evt_time + peak_to_peak, side='right')
-            if p_idx < len(peak_times) and peak_times[p_idx] < next_evt_start_time:
+            p_idx = np.searchsorted(
+                    peak_times, evt_time + peak_to_peak, side="right"
+                    )
+            if (
+                    p_idx < len(peak_times)
+                    and peak_times[p_idx] < next_evt_start_time
+            ):
                 inter_time = peak_times[p_idx]
             else:
                 inter_time = next_evt_start_time
 
-            # Fast binary lookup for pulse artifacts
-            # Replaces: pulse_idx = np.argmax(self.pulses_peaks[decay_region])
             if pulse_times.size > 0:
-                pl_idx = np.searchsorted(pulse_times, evt_time, side='right')
-                if pl_idx < len(pulse_times) and pulse_times[pl_idx] < next_evt_start_time:
+                pl_idx = np.searchsorted(pulse_times, evt_time, side="right")
+                if (
+                        pl_idx < len(pulse_times)
+                        and pulse_times[pl_idx] < next_evt_start_time
+                ):
                     pulse_time = pulse_times[pl_idx]
                 else:
                     pulse_time = next_evt_start_time
             else:
                 pulse_time = next_evt_start_time
 
-            # Boundaries structurally identical to original
-            end_roi_time = min(evt_time + t_aft, inter_time, pulse_time, next_evt_start_time)
+            end_roi_time = min(
+                    evt_time + t_aft, inter_time, pulse_time, next_evt_start_time
+                    )
 
             t_o_zs = self.events_attrs[evt_time]["t_o_zs"]
             t_o_zp = self.events_attrs[evt_time]["t_o_zp"]
-            start_roi_time = max(float(self.time[0]), evt_time - t_aft, t_o_zs - baseline_time)
+            start_roi_time = max(
+                    float(self.time[0]), evt_time - t_aft, t_o_zs - baseline_time
+                    )
 
             # =========================================================
             # 2. DYNAMIC SLICING VIA vtp_relative
@@ -1588,7 +2441,6 @@ class EvtPro(Analyzer):
 
             roi_slice = slice(start_roi_idx, end_roi_idx + 1)
 
-            # Rejections kept identical
             if end_roi_idx - start_roi_idx < 2:
                 msg = f"{evt_time:12.4f}[s] rejected, short response. Indices: {start_roi_idx} to {end_roi_idx}"
                 self._reject_event(evt_time, "short_response", msg)
@@ -1596,36 +2448,47 @@ class EvtPro(Analyzer):
 
             t_segm = self.time[roi_slice]
             if t_segm.size > 0 and (t_segm[-1] - t_segm[0]) > 1.0:
-                print(f"Event at {evt_time:.4f}s exceeds 1s: length = {t_segm[-1] - t_segm[0]:.4f}s")
+                print(
+                        f"Event at {evt_time:.4f}s exceeds 1s: length = {t_segm[-1] - t_segm[0]:.4f}s"
+                        )
 
             if len(t_segm) == 0:
                 self._reject_event(
-                        evt_time, "empty_segment", f"{evt_time:12.4f}[s] rejected, completely empty segment."
+                        evt_time,
+                        "empty_segment",
+                        f"{evt_time:12.4f}[s] rejected, completely empty segment.",
                         )
                 continue
 
-            if not (t_segm[0] <= t_o_zs <= t_segm[-1]) or not (t_segm[0] <= t_o_zp <= t_segm[-1]):
-                msg = (f"{evt_time:12.4f}[s] rejected, zero crossings out of bounds by t_aft constraint. "
-                       f"Segment: [{t_segm[0]:.4f}, {t_segm[-1]:.4f}], zs: {t_o_zs:.4f}, zp: {t_o_zp:.4f}")
+            if not (t_segm[0] <= t_o_zs <= t_segm[-1]) or not (
+                    t_segm[0] <= t_o_zp <= t_segm[-1]
+            ):
+                msg = (
+                        f"{evt_time:12.4f}[s] rejected, zero crossings out of bounds by t_aft constraint. "
+                        f"Segment: [{t_segm[0]:.4f}, {t_segm[-1]:.4f}], zs: {t_o_zs:.4f}, zp: {t_o_zp:.4f}"
+                )
                 self._reject_event(evt_time, "zero_pass_error", msg)
                 continue
 
             # =========================================================
             # 3. SEGMENT EXTRACTION & FORMATTING
             # =========================================================
-            # z_segm = reset_array(self.zero_pass[roi_slice], vtp_relative(t_o_zp, t_segm))
-            z_segm = np.zeros_like(self.time[roi_slice])  # Blank canvas for the segment
-            z_segm[vtp_relative(t_o_zp, t_segm)] = 1  # Safely force end to 1
+            z_segm = np.zeros_like(self.time[roi_slice])
+            z_segm[vtp_relative(t_o_zp, t_segm)] = 1
             z_segm[vtp_relative(t_o_zs, t_segm)] = -1
 
             p_segm = self.peaks[roi_slice]
             num_peaks_in_segm = np.count_nonzero(p_segm > 0)
 
             if num_peaks_in_segm > 1:
-                p_segm = reset_array(self.peaks[roi_slice], vtp_relative(evt_time, t_segm))
+                p_segm = reset_array(
+                        self.peaks[roi_slice], vtp_relative(evt_time, t_segm)
+                        )
             elif num_peaks_in_segm == 0:
                 self._reject_event(
-                        evt_time, "no_peak_detected", f"{evt_time:12.4f}[s] rejected, No peaks detected in final slice."
+                        evt_time,
+                        "no_peak_detected",
+                        f"{evt_time:12.4f}[s] rejected, No peaks detected in final slice.",
                         )
                 continue
 
@@ -1633,9 +2496,15 @@ class EvtPro(Analyzer):
             d_segm = self.derivative[roi_slice]
 
             t_o_s = self.events_attrs[evt_time]["t_o_s"]
-            s_segm = reset_array(self.der_peaks[roi_slice], vtp_relative(t_o_s, t_segm))
+            s_segm = reset_array(
+                    self.der_peaks_rise[roi_slice], vtp_relative(t_o_s, t_segm)
+                    )
 
-            # Consolidated dictionary updates
+            t_o_sd = self.events_attrs[evt_time]["t_o_sd"]
+            sd_segm = reset_array(
+                    self.der_peaks_decay[roi_slice], vtp_relative(t_o_sd, t_segm)
+                    )
+
             self.events_attrs[evt_time].update(
                     {
                             "end_time": float(t_segm[-1] - evt_time),
@@ -1644,11 +2513,229 @@ class EvtPro(Analyzer):
                             "p_segm"  : p_segm,
                             "d_segm"  : d_segm,
                             "s_segm"  : s_segm,
-                            "z_segm"  : z_segm
+                            "sd_segm" : sd_segm,
+                            "z_segm"  : z_segm,
                             }
                     )
 
-        print(f" Accepted events: {len(self.events_attrs)}, Rejected: {total_initial_events - len(self.events_attrs)}")
+        print(
+                f" Accepted events: {len(self.events_attrs)}, Rejected: {total_initial_events - len(self.events_attrs)}"
+                )
+
+    # @timing
+    # def _select_events(self):
+    #     """
+    #     Extracts foundational kinetic properties for detected peaks and initializes valid putative events.
+    #
+    #     Iterates over all identified peak indices, utilizing the interval between consecutive
+    #     peaks to define regional boundaries. Isolates the maximum rising slope,
+    #     calculates the absolute start time of the event rise, and refines the peak location.
+    #     """
+    #     self.events_attrs = {}
+    #
+    #     # 1. Evaluate the condition ONCE and store the indices
+    #     peak_indices = np.where(self.peaks > 0)[0]
+    #     self.peaks[peak_indices] = 1.0
+    #     num_peaks = len(peak_indices)
+    #
+    #     if num_peaks == 0:
+    #         print("No peaks detected.")
+    #         return
+    #
+    #     # 2. Extract marker indices ONCE for fast bounded lookups
+    #     slope_indices = np.where(self.der_peaks_rise > 0)[0]
+    #     zc_indices = np.where(self.zero_pass_rise != 0)[0]  # Restored to match crossing_point (!= 0) behavior
+    #
+    #     for i in range(num_peaks):
+    #         evt_pos = peak_indices[i]
+    #         evt_time = float(self.time[evt_pos])
+    #
+    #         # Define regional boundaries exactly as before
+    #         prev_pos = peak_indices[i - 1] if i > 0 else 0
+    #         next_pos = peak_indices[i + 1] if i < num_peaks - 1 else len(self.time) - 1
+    #
+    #         # ---------------------------------------------------------
+    #         # 1. Restored Bounded Slope Lookup
+    #         # Equivalent to: np.where(self.der_peaks[prev_pos:evt_pos + 1] > 0)
+    #         # ---------------------------------------------------------
+    #         s_start = np.searchsorted(slope_indices, prev_pos, side='left')
+    #         s_end = np.searchsorted(slope_indices, evt_pos, side='right')
+    #
+    #         if s_start == s_end:
+    #             msg = f"{evt_time:12.4f}[s] rejected (No slope found in region)"
+    #             self._reject_event(evt_time, "no_slope_region", msg)
+    #             continue
+    #
+    #         abs_slope_pos = slope_indices[s_end - 1]  # [-1] grabs the exact same slope as the old code
+    #         slope_value = float(self.derivative[abs_slope_pos])
+    #         slope_time = float(self.time[abs_slope_pos])
+    #
+    #         # ---------------------------------------------------------
+    #         # 2. Restored Bounded Zero-Crossings Lookup
+    #         # ---------------------------------------------------------
+    #         # zs_p equivalent: Find the LAST non-zero pass in [max(0, prev_pos - 1), abs_slope_pos]
+    #         zs_limit = max(0, prev_pos - 1)
+    #         zc_s_start = np.searchsorted(zc_indices, zs_limit, side='left')
+    #         zc_s_end = np.searchsorted(zc_indices, abs_slope_pos, side='right')
+    #
+    #         if zc_s_start == zc_s_end:
+    #             msg = f"{evt_time:12.4f}[s] rejected (crossings not found)"
+    #             self._reject_event(evt_time, "crossings_not_found", msg)
+    #             continue
+    #
+    #         abs_zs_pos = zc_indices[zc_s_end - 1]
+    #
+    #         # zp_p equivalent: Find the FIRST non-zero pass in [abs_slope_pos, next_pos]
+    #         zc_p_start = np.searchsorted(zc_indices, abs_slope_pos, side='left')
+    #         zc_p_end = np.searchsorted(zc_indices, next_pos, side='right')
+    #
+    #         if zc_p_start == zc_p_end:
+    #             msg = f"{evt_time:12.4f}[s] rejected (crossings not found)"
+    #             self._reject_event(evt_time, "crossings_not_found", msg)
+    #             continue
+    #
+    #         abs_zp_pos = zc_indices[zc_p_start]
+    #
+    #         # ---------------------------------------------------------
+    #         # 3. Direct Absolute Assignment
+    #         # ---------------------------------------------------------
+    #         t_o_zs = float(self.time[abs_zs_pos])
+    #         t_o_zp = float(self.time[abs_zp_pos])
+    #
+    #         self.events_attrs[evt_time] = self.default_event.copy()
+    #         self.events_attrs[evt_time].update(
+    #                 {
+    #                         "t_o_s"                : slope_time,
+    #                         "slope_peak_delta_time": evt_time - slope_time,
+    #                         "rise_slope_val"       : slope_value,
+    #                         "t_o_zs"               : t_o_zs,
+    #                         "t_o_zp"               : t_o_zp,
+    #                         "peak_error_time"      : evt_time - t_o_zp,
+    #                         "rise_time_peak"       : evt_time - t_o_zs,
+    #                         "rise_time_der"        : t_o_zp - t_o_zs
+    #                         }
+    #                 )
+    #
+    #     print(f" Accepted events: {len(self.events_attrs)}, Rejected: {num_peaks - len(self.events_attrs)}")
+    #
+    # @timing
+    # def _event_sections(self, t_aft, baseline_time, peak_to_peak=0.001):
+    #     """
+    #     Extracts and isolates the specific waveform data arrays for each validated event
+    #     using absolute time boundaries.
+    #     """
+    #     evt_times_list = list(self.events_attrs.keys())
+    #     total_initial_events = len(evt_times_list)
+    #
+    #     # Pre-extract global event times to eliminate O(N) slicing inside the loop
+    #     peak_times = self.time[self.peaks > 0]
+    #     pulse_times = self.time[self.pulses_peaks > 0] if self.cdac.size else np.array([])
+    #
+    #     for i, evt_time in enumerate(evt_times_list):
+    #         # =========================================================
+    #         # 1. TIME-BASED BOUNDARY CALCULATIONS
+    #         # =========================================================
+    #         if i + 1 < len(evt_times_list):
+    #             next_evt_time = evt_times_list[i + 1]
+    #             next_evt_start_time = self.events_attrs[next_evt_time]["t_o_zs"]
+    #         else:
+    #             next_evt_start_time = float(self.time[-1])
+    #
+    #         # Fast binary lookup for trailing peaks (interferences)
+    #         # Replaces: decay_peaks_idx = np.where(decay_peaks > 0)[0]
+    #         p_idx = np.searchsorted(peak_times, evt_time + peak_to_peak, side='right')
+    #         if p_idx < len(peak_times) and peak_times[p_idx] < next_evt_start_time:
+    #             inter_time = peak_times[p_idx]
+    #         else:
+    #             inter_time = next_evt_start_time
+    #
+    #         # Fast binary lookup for pulse artifacts
+    #         # Replaces: pulse_idx = np.argmax(self.pulses_peaks[decay_region])
+    #         if pulse_times.size > 0:
+    #             pl_idx = np.searchsorted(pulse_times, evt_time, side='right')
+    #             if pl_idx < len(pulse_times) and pulse_times[pl_idx] < next_evt_start_time:
+    #                 pulse_time = pulse_times[pl_idx]
+    #             else:
+    #                 pulse_time = next_evt_start_time
+    #         else:
+    #             pulse_time = next_evt_start_time
+    #
+    #         # Boundaries structurally identical to original
+    #         end_roi_time = min(evt_time + t_aft, inter_time, pulse_time, next_evt_start_time)
+    #
+    #         t_o_zs = self.events_attrs[evt_time]["t_o_zs"]
+    #         t_o_zp = self.events_attrs[evt_time]["t_o_zp"]
+    #         start_roi_time = max(float(self.time[0]), evt_time - t_aft, t_o_zs - baseline_time)
+    #
+    #         # =========================================================
+    #         # 2. DYNAMIC SLICING VIA vtp_relative
+    #         # =========================================================
+    #         start_roi_idx = vtp_relative(start_roi_time, self.time)
+    #         end_roi_idx = vtp_relative(end_roi_time, self.time)
+    #
+    #         roi_slice = slice(start_roi_idx, end_roi_idx + 1)
+    #
+    #         # Rejections kept identical
+    #         if end_roi_idx - start_roi_idx < 2:
+    #             msg = f"{evt_time:12.4f}[s] rejected, short response. Indices: {start_roi_idx} to {end_roi_idx}"
+    #             self._reject_event(evt_time, "short_response", msg)
+    #             continue
+    #
+    #         t_segm = self.time[roi_slice]
+    #         if t_segm.size > 0 and (t_segm[-1] - t_segm[0]) > 1.0:
+    #             print(f"Event at {evt_time:.4f}s exceeds 1s: length = {t_segm[-1] - t_segm[0]:.4f}s")
+    #
+    #         if len(t_segm) == 0:
+    #             self._reject_event(
+    #                     evt_time, "empty_segment", f"{evt_time:12.4f}[s] rejected, completely empty segment."
+    #                     )
+    #             continue
+    #
+    #         if not (t_segm[0] <= t_o_zs <= t_segm[-1]) or not (t_segm[0] <= t_o_zp <= t_segm[-1]):
+    #             msg = (f"{evt_time:12.4f}[s] rejected, zero crossings out of bounds by t_aft constraint. "
+    #                    f"Segment: [{t_segm[0]:.4f}, {t_segm[-1]:.4f}], zs: {t_o_zs:.4f}, zp: {t_o_zp:.4f}")
+    #             self._reject_event(evt_time, "zero_pass_error", msg)
+    #             continue
+    #
+    #         # =========================================================
+    #         # 3. SEGMENT EXTRACTION & FORMATTING
+    #         # =========================================================
+    #         # z_segm = reset_array(self.zero_pass[roi_slice], vtp_relative(t_o_zp, t_segm))
+    #         z_segm = np.zeros_like(self.time[roi_slice])  # Blank canvas for the segment
+    #         z_segm[vtp_relative(t_o_zp, t_segm)] = 1  # Safely force end to 1
+    #         z_segm[vtp_relative(t_o_zs, t_segm)] = -1
+    #
+    #         p_segm = self.peaks[roi_slice]
+    #         num_peaks_in_segm = np.count_nonzero(p_segm > 0)
+    #
+    #         if num_peaks_in_segm > 1:
+    #             p_segm = reset_array(self.peaks[roi_slice], vtp_relative(evt_time, t_segm))
+    #         elif num_peaks_in_segm == 0:
+    #             self._reject_event(
+    #                     evt_time, "no_peak_detected", f"{evt_time:12.4f}[s] rejected, No peaks detected in final slice."
+    #                     )
+    #             continue
+    #
+    #         r_segm = self.resp[roi_slice]
+    #         d_segm = self.derivative[roi_slice]
+    #
+    #         t_o_s = self.events_attrs[evt_time]["t_o_s"]
+    #         s_segm = reset_array(self.der_peaks_rise[roi_slice], vtp_relative(t_o_s, t_segm))
+    #
+    #         # Consolidated dictionary updates
+    #         self.events_attrs[evt_time].update(
+    #                 {
+    #                         "end_time": float(t_segm[-1] - evt_time),
+    #                         "t_segm"  : t_segm,
+    #                         "r_segm"  : r_segm,
+    #                         "p_segm"  : p_segm,
+    #                         "d_segm"  : d_segm,
+    #                         "s_segm"  : s_segm,
+    #                         "z_segm"  : z_segm
+    #                         }
+    #                 )
+    #
+    #     print(f" Accepted events: {len(self.events_attrs)}, Rejected: {total_initial_events - len(self.events_attrs)}")
 
     @timing
     def get_evt(self, peak_to_peak: float = 0.01, t_aft=0.04, baseline_time=0.002):
@@ -1827,7 +2914,7 @@ class EvtPro(Analyzer):
         self._get_adj(baseline_time)
 
     @timing
-    def fit_events(self, gaussian_window=0.002, fit_beg=0.00, fit_end=0.015, sharpness=2, min_length=0.0015):
+    def fit_events(self, gaussian_window=0.002, fit_beg=0.00, fit_end=0.015, sharpness=2, min_length=0.003):
         """
         Fits the decay phase of events to an exponential curve.
         Operates strictly in data-gathering mode; does not reject events.
@@ -1839,13 +2926,13 @@ class EvtPro(Analyzer):
         pos_fit_start = vtp(fit_beg, self.t_delta)
         pos_fit_end = vtp(fit_end, self.t_delta)
         dire = self.direction
-        fig, ax = plt.subplots(figsize=(8, 5))  # testing... delete me after
-
-        for evt_time, evt_data in self.events_attrs.items():
+        # fig, ax = plt.subplots(figsize=(8, 5))  # testing... delete me after
+        # counter = 0  # testing... delete me after
+        for evt_time, evt_data in self.events_attrs.copy().items():
             evt_data.update(
                     {
-                            "fit_min"  : np.nan, "fit_peak": np.nan, "tau": np.nan,
-                            "mse_fit"  : np.nan, "pearson_r": np.nan, "decay_slope": np.nan,
+                            "fit_min": np.nan, "fit_peak": np.nan, "tau": np.nan,
+                            "mse_fit": np.nan, "pearson_r": np.nan, "decay_slope": np.nan,
                             }
                     )
 
@@ -1861,6 +2948,8 @@ class EvtPro(Analyzer):
             s_resp_s = smoothed_resp[abs_fit_start:abs_fit_end]
 
             if s_resp_s.size == 0:
+                msg = f"Event at {evt_time:.4f}[s] rejected: empty_slice s_resp_s.size == 0."
+                self._reject_event(evt_time, "empty_slice", msg)
                 continue
 
             # =========================================================
@@ -1877,7 +2966,8 @@ class EvtPro(Analyzer):
                 zero_cross_end = invalid_pts[0] if invalid_pts.size > 0 else s_resp_s.size
                 local_ds_end = min(np.argmax(s_resp_s), zero_cross_end)
             else:
-                print(f"Wrong direction at {evt_time}")
+                msg = f"Event at {evt_time:.4f}[s] rejected: wrong_direction dire={dire}."
+                self._reject_event(evt_time, "wrong_direction", msg)
                 continue
 
             # =========================================================
@@ -1889,39 +2979,43 @@ class EvtPro(Analyzer):
             t_short = t_segm[fit_region_restricted]
 
             if local_ds_end <= 0 or r_s_short.size < min_len_pts or r_s_short.size != t_short.size:
+                msg = f"Event at {evt_time:.4f}[s] rejected: fit_length_problem size={r_s_short.size} (min={min_len_pts})."
+                self._reject_event(evt_time, "fit_length_problem", msg)
                 continue
-
+            # =========================================================
+            # Exponential fitting
             fit_i_0, fit_pk0, fit_t0, pearson_r = exp_fit(r_s_short, t_short, dire)
+            # =========================================================
             r_short = r_segm[fit_region_restricted]
             fit_curve = exp_decay(t_short, fit_i_0, fit_pk0, fit_t0)  # testing... delete me after
             mse_fit = mse(r_short, fit_curve)
 
             # testing... delete me after
-            if 1482.265 < evt_data["t_o_p"] < 1482.296:  # testing... delete me after
-                # def exp_fit(response, time, direction):
-                lin_resp = exp_to_lin(r_s_short, dire)
-                ax.plot(t_short, lin_resp, color="blue", alpha=0.3)  # testing... delete me after
-                print(f"{'T'*20} Testing delete me after... {fit_i_0=} {fit_pk0=} {fit_t0=} {pearson_r=}")
-                ax.plot(t_segm, r_segm, color="black", alpha=0.3)  # testing... delete me after
-                ax.plot(t_short, r_s_short, color="black", alpha=0.3)  # testing... delete me after
-                ax.plot(t_short, fit_curve, color="red", linewidth=1.5, alpha=0.8)  # testing... delete me after
+            # if np.isnan(pearson_r) and counter < 10:  # testing... delete me after
+            #     ax.plot(t_short, r_s_short, color="black", alpha=0.1)  # testing... delete me after
+            #     lin_resp = exp_to_lin(r_s_short, dire)
+            #     ax.plot(t_short, lin_resp, color="blue", alpha=0.3)  # testing... delete me after
+            #     # print(f"{'T' * 20} Testing delete me after... "
+            #     #       f"{len(t_short)=} {len(r_s_short)=} {fit_i_0=} {fit_pk0=} {fit_t0=} {pearson_r=}")
+            #     ax.plot(t_short, fit_curve, color="red", linewidth=1.5, alpha=0.1)  # testing... delete me after
+            #     counter += 1
 
             evt_data.update(
                     {
-                            "fit_min"       : fit_i_0,
-                            "fit_peak"      : fit_pk0,
-                            "tau"           : fit_t0,
-                            "decay_slope"   : -fit_pk0/fit_t0,
-                            "mse_fit"       : mse_fit,
-                            "pearson_r"     : pearson_r,
+                            "fit_min"    : fit_i_0,
+                            "fit_peak"   : fit_pk0,
+                            "tau"        : fit_t0,
+                            "decay_slope": -fit_pk0 / fit_t0,
+                            "mse_fit"    : mse_fit,
+                            "pearson_r"  : pearson_r,
                             }
                     )
 
         # testing... delete me after
-        ax.set_title("testing... delete me after")  # testing... delete me after
-        ax.set_xlabel("Time (s)")  # testing... delete me after
-        ax.set_ylabel("Amplitude")  # testing... delete me after
-        plt.show()  # testing... delete me after
+        # ax.set_title("testing... delete me after")  # testing... delete me after
+        # ax.set_xlabel("Time (s)")  # testing... delete me after
+        # ax.set_ylabel("Amplitude")  # testing... delete me after
+        # plt.show()  # testing... delete me after
 
     @timing
     def inspect_fits(self, max_events=9, randomize=True):
@@ -2230,6 +3324,8 @@ class EvtPro(Analyzer):
     @timing
     def get_auc(self, already_adjusted=True):
         b_amp = 0
+        fs = 1/self.t_delta
+        points = vtp(0.001,self.t_delta)
         # RAM FIX: Iterate over a list of keys instead of deepcopying the whole dictionary
         initial_event_count = len(self.events_attrs)
         for evt_pos in list(self.events_attrs.keys()):
@@ -2254,8 +3350,10 @@ class EvtPro(Analyzer):
             end_pos = peak_pos + crossing_pos
             area = calculate_area(
                     evt["t_segm"][start_pos:end_pos],
+                    # smoothing(evt["r_segm"][start_pos:end_pos], points, sharpness=8, c_type='g', fs=fs)[0] - b_amp
                     evt["r_segm"][start_pos:end_pos] - b_amp
                     )
+
             evt["r_auc"] = area
         print(f" Accepted events: {len(self.events_attrs)}, Rejected: {initial_event_count - len(self.events_attrs)}")
 
@@ -2341,8 +3439,10 @@ class EvtPro(Analyzer):
             # =====================================================================
             peak_err = evt.get("peak_error_time")
             bad_peak_err = peak_err is None or abs(peak_err) > zp_to_pp
-            if check_rule("peak_error_time", bad_peak_err,
-                          "peak_alignment_error", "zp_to_pp", zp_to_pp, ".6f"):
+            if check_rule(
+                    "peak_error_time", bad_peak_err,
+                    "peak_alignment_error", "zp_to_pp", zp_to_pp, ".6f"
+                    ):
                 continue
 
             # =====================================================================
@@ -2350,14 +3450,18 @@ class EvtPro(Analyzer):
             # =====================================================================
             rise_slope = evt.get("rise_slope_val")
             bad_slope = rise_slope is None or (rise_slope <= max_slope if dire == -1 else rise_slope >= max_slope)
-            if check_rule("rise_slope_val", bad_slope,
-                          "slope_threshold", "max_slope", max_slope, ".2f"):
+            if check_rule(
+                    "rise_slope_val", bad_slope,
+                    "slope_threshold", "max_slope", max_slope, ".2f"
+                    ):
                 continue
 
-            decay_slope = evt.get("decay_slope")
-            bad_slope_ratio = decay_slope is None or decay_slope/rise_slope >= 0.0 or abs(decay_slope) > 1.1*abs(rise_slope)
-            if check_rule("rise_slope_val", bad_slope_ratio,
-                          "wrong_slope_ratio", "max_decay_slope", decay_slope, ".2f"):
+            decay_slope = evt.get("decay_slope_val")
+            bad_slope_ratio = decay_slope is None or decay_slope / rise_slope >= 0.0 or abs(decay_slope) > abs(rise_slope)
+            if check_rule(
+                    "rise_slope_val", bad_slope_ratio,
+                    "wrong_slope_ratio", "max_decay_slope", decay_slope, ".2f"
+                    ):
                 continue
 
             # =====================================================================
@@ -2365,21 +3469,26 @@ class EvtPro(Analyzer):
             # =====================================================================
             rise_time = evt.get("rise_time_peak")
             bad_rise_time = rise_time is None or rise_time > max_rise_time
-            if check_rule("rise_time_peak", bad_rise_time,
-                          "rise_time_limit", "max_rise_time", max_rise_time, ".6f"):
+            if check_rule(
+                    "rise_time_peak", bad_rise_time,
+                    "rise_time_limit", "max_rise_time", max_rise_time, ".6f"
+                    ):
                 continue
 
             slope_delta = evt.get("slope_peak_delta_time")
             bad_slope_delta = slope_delta is None or slope_delta > slope_peak_time
             if check_rule(
                     "slope_peak_delta_time", bad_slope_delta,
-                    "slope_peak_delta", "slope_peak_time", slope_peak_time, ".6f"):
+                    "slope_peak_delta", "slope_peak_time", slope_peak_time, ".6f"
+                    ):
                 continue
 
             r_auc = evt.get("r_auc")
-            bad_auc = r_auc is None or dire*r_auc < dire*min_auc
-            if check_rule("r_auc", bad_auc,
-                          "low_auc", "min_auc", min_auc, ".6f"):
+            bad_auc = r_auc is None or dire * r_auc < dire * min_auc
+            if check_rule(
+                    "r_auc", bad_auc,
+                    "low_auc", "min_auc", min_auc, ".6f"
+                    ):
                 continue
 
             # =====================================================================
@@ -2387,15 +3496,19 @@ class EvtPro(Analyzer):
             # =====================================================================
             if use_fit:
                 pearson_r = evt.get("pearson_r")
-                bad_pearson_r = pearson_r is None or np.isnan(pearson_r) or dire*pearson_r < dire*min_pearson_r
-                if check_rule("pearson_r", bad_pearson_r,
-                              "poor_pearson_r", "min_pearson_r", min_pearson_r, ".6f"):
+                bad_pearson_r = pearson_r is None or np.isnan(pearson_r) or dire * pearson_r < dire * min_pearson_r
+                if check_rule(
+                        "pearson_r", bad_pearson_r,
+                        "poor_pearson_r", "min_pearson_r", min_pearson_r, ".6f"
+                        ):
                     continue
 
                 tau = evt.get("tau")
                 bad_tau = tau is None or np.isnan(tau) or not (fit_tau_min < tau < fit_tau_max)
-                if check_rule("tau", bad_tau,
-                              "invalid_tau", "fit_tau_max", fit_tau_max, ".4f"):
+                if check_rule(
+                        "tau", bad_tau,
+                        "invalid_tau", "fit_tau_max", fit_tau_max, ".4f"
+                        ):
                     continue
 
             # =====================================================================
@@ -2403,8 +3516,10 @@ class EvtPro(Analyzer):
             # =====================================================================
             amp_val = evt.get("amplitude")
             bad_amp = amp_val is None or not (amp_val * dire > min_ampl * dire)
-            if check_rule("amplitude", bad_amp,
-                          "amplitude_limit", "min_ampl", min_ampl, ".2f"):
+            if check_rule(
+                    "amplitude", bad_amp,
+                    "amplitude_limit", "min_ampl", min_ampl, ".2f"
+                    ):
                 continue
 
         current_rejections = sum(self.rejected_counts.values())
@@ -2420,129 +3535,6 @@ class EvtPro(Analyzer):
             if count > 0:
                 print(f"  • {reason:<25}: {count}")
         print("=" * 50 + "\n")
-
-    # def screen_events(
-    #         self,
-    #         max_slope: float = -15000,
-    #         zp_to_pp: float = 0.002,
-    #         max_rise_time: float = 0.010,
-    #         slope_peak_time: float = 0.005,
-    #         min_auc: float = 0.0005,
-    #         min_pearson_r: float = 0.9,
-    #         min_ampl: float = -1.48,
-    #         use_fit: bool = True,
-    #         fit_tau_max: float = 0.002,
-    #         fit_tau_min: float = 0.0005
-    #         ):
-    #     if not self.events_attrs:
-    #         print("Screening cancelled: No raw putative events available to process.")
-    #         return
-    #
-    #     initial_event_times = list(self.events_attrs.keys())
-    #     print(f"Starting downstream screening pass on {len(initial_event_times)} putative events...")
-    #
-    #     # Defined ONCE before the loop; dynamically looks up `evt` in screen_events scope
-    #     def fmt(key: str, spec: str = ".4f") -> str:
-    #         val = evt.get(key)
-    #         if isinstance(val, (int, float)) and not np.isnan(val):
-    #             return f"{key}={val:{spec}}"
-    #         return f"{key}={val}"
-    #
-    #     for evt_time in initial_event_times:
-    #         evt = self.events_attrs[evt_time]
-    #
-    #         # =====================================================================
-    #         # 1. STRUCTURAL & ZERO-PASS INTEGRITY CONSTRAINTS
-    #         # =====================================================================
-    #         peak_error_time = evt.get("peak_error_time")
-    #         if peak_error_time is None or abs(peak_error_time) > zp_to_pp:
-    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                    f"{fmt('peak_error_time', '.6f')} ({zp_to_pp=:.6f}[s]).")
-    #             self._reject_event(evt_time, "peak_alignment_error", msg)
-    #             continue
-    #
-    #         # =====================================================================
-    #         # 2. DERIVATIVE & VELOCITY CONSTRAINTS
-    #         # =====================================================================
-    #         slope_value = evt.get("rise_slope_val")
-    #         is_rejected_slope = False
-    #         match self.direction:
-    #             case -1:
-    #                 if not max_slope < slope_value: is_rejected_slope = True
-    #             case 1:
-    #                 if not max_slope > slope_value: is_rejected_slope = True
-    #
-    #         if is_rejected_slope:
-    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                    f"{fmt('rise_slope_val', '.2f')} ({max_slope=:.2f}).")
-    #             self._reject_event(evt_time, "slope_threshold", msg)
-    #             continue
-    #
-    #         # =====================================================================
-    #         # 3. KINETIC & PHENOTYPIC SORTING CONSTRAINTS
-    #         # =====================================================================
-    #         rise_time_peak = evt.get("rise_time_peak")
-    #         if rise_time_peak is None or rise_time_peak > max_rise_time:
-    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                    f"{fmt('rise_time_peak', '.6f')} ({max_rise_time=:.6f}[s]).")
-    #             self._reject_event(evt_time, "rise_time_limit", msg)
-    #             continue
-    #
-    #         slope_peak_delta_time = evt.get("slope_peak_delta_time")
-    #         if slope_peak_delta_time is None or slope_peak_delta_time > slope_peak_time:
-    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                    f"{fmt('slope_peak_delta_time', '.6f')} ({slope_peak_time=:.6f}[s]).")
-    #             self._reject_event(evt_time, "slope_peak_delta", msg)
-    #             continue
-    #
-    #         r_auc = evt.get("r_auc")
-    #         if r_auc is None or abs(r_auc) < abs(min_auc):
-    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                    f"{fmt('r_auc', '.6f')} ({min_auc=:.6f}).")
-    #             self._reject_event(evt_time, "low_auc", msg)
-    #             continue
-    #
-    #         # =====================================================================
-    #         # 4. FIT QUALITY CONSTRAINTS
-    #         # =====================================================================
-    #         if use_fit:
-    #             pearson_r = evt.get("pearson_r")
-    #             if pearson_r is None or np.isnan(pearson_r) or abs(pearson_r) < abs(min_pearson_r):
-    #                 msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                        f"{fmt('pearson_r', '.6f')} ({min_pearson_r=:.6f}).")
-    #                 self._reject_event(evt_time, "poor_pearson_r", msg)
-    #                 continue
-    #
-    #             tau = evt.get("tau")
-    #             if tau is None or np.isnan(tau) or not (abs(fit_tau_min) < abs(tau) < abs(fit_tau_max)):
-    #                 msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                        f"{fit_tau_min=:.4f} {fmt('tau', '.4f')} {fit_tau_max=:.4f}.")
-    #                 self._reject_event(evt_time, "invalid_tau", msg)
-    #                 continue
-    #
-    #         # =====================================================================
-    #         # 5. AMPLITUDE CONSTRAINTS
-    #         # =====================================================================
-    #         amp_val = evt.get("amplitude")
-    #         if amp_val is None or not (amp_val * self.direction > min_ampl * self.direction):
-    #             msg = (f" Event at {evt_time:12.4f}[s] rejected: "
-    #                    f"{fmt('amplitude', '.2f')} ({min_ampl=:.2f}).")
-    #             self._reject_event(evt_time, "amplitude_limit", msg)
-    #             continue
-    #
-    #     current_rejections = sum(self.rejected_counts.values())
-    #     print("\n" + "=" * 50)
-    #     print(" SCREENING PASS COMPLETE COMPLIANCE SUMMARY")
-    #     print("=" * 50)
-    #     print(f" Putative Events Inputted : {len(initial_event_times)}")
-    #     print(f" Validated Events Retained: {len(self.events_attrs)}")
-    #     print(f" Total Lifetime Rejections: {current_rejections}")
-    #     print("-" * 50)
-    #     print(" Cumulative Breakdown of Rejections:")
-    #     for reason, count in self.rejected_counts.items():
-    #         if count > 0:
-    #             print(f"  • {reason:<25}: {count}")
-    #     print("=" * 50 + "\n")
 
     @timing
     def burst(self, kernel_length=0.5, min_num_ap=1):
@@ -2719,8 +3711,8 @@ class EvtPro(Analyzer):
                 if slice_len > 0 and start_idx >= 0:
                     self_copy.resp[start_idx:end_idx] -= r_segm[:slice_len]
 
-        if smooth_params:  # This block is to remove the noise and make any remaining undetected event more visible
-            self_copy.get_smooth(*smooth_params)
+        # if smooth_params:  # This block is to remove the noise and make any remaining undetected event more visible
+        #     self_copy.get_smooth(*smooth_params)
 
         ax2.plot(self.time, self_copy.resp, "k", linewidth=1.2, label="Subtracted Trace")
         ax2.set_title(f"Subtracted Recording ({len(self.events_attrs)} events removed)")
@@ -2789,16 +3781,20 @@ class EvtPro(Analyzer):
                             )
                 events_labeled = True
 
-        if self.ifreq_blocks.size:
-            idx_blocks = np.nonzero(self.ifreq_blocks)[0][::10]
-            if idx_blocks.size > 0:
-                ax1.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
-                ax1.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
+        if hasattr(self, 'ifreq_blocks') and self.ifreq_blocks.size > 0:
+            ax1.plot(self.time, self.ifreq_blocks, "g", lw=2.0, label="Instant Freq")
+            ax1.plot(self.time, self.mfreq_blocks, "r:", lw=2.0, label="Mean Freq")
+        # if self.ifreq_blocks.size:
+        #     idx_blocks = np.nonzero(self.ifreq_blocks)[0]
+        #     if idx_blocks.size > 0:
+        #         ax1.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
+        #         ax1.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
 
-            burst_freq_power = np.array(
-                    [self.get_arr("burst_start_time", "burst"), self.get_arr("burst_freq_power", "burst")]
-                    )
-            ax1.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
+            # burst_freq_power = np.array(
+            #         [self.get_arr("burst_start_time", "burst"),
+            #          self.get_arr("burst_freq_power", "burst")]
+            #         )
+            # ax1.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
 
         ax1.set_title(f"{self.sweep_index=} {title} ({len(self.events_attrs)} events)")
         ax1.set_ylabel("Amplitude")

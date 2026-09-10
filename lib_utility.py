@@ -831,35 +831,43 @@ def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
     if len(arr) < 2:
         raise ValueError("Array must contain at least 2 points.")
 
+    # Cast to float64 to ensure the array can hold np.nan
     if direction == 1:
-        y = arr
+        y = arr.astype(np.float64)
     elif direction == -1:
-        y = -arr
+        y = -arr.astype(np.float64)
     else:
         raise ValueError("Direction must be 1 or -1.")
 
-    # CONTROL STATEMENT: Guard against non-positive, zero, or NaN/Inf values
-    if np.any(y <= 0.0) or np.any(np.isnan(y)) or np.any(np.isinf(y)):
-        raise ValueError("Array contains non-positive, zero, or non-finite values incompatible with log conversion.")
+    # Create a mask for values that are valid for a logarithmic transformation
+    valid_mask = np.isfinite(y) & (y > 0.0)
 
-    # Mathematically exact log transformation (no distortion offset needed)
-    return np.log(y)
+    # Replace invalid values with NaN.
+    # This keeps the array the exact same length as your time array.
+    y_safe = np.where(valid_mask, y, np.nan)
+
+    return np.log(y_safe)
 # @njit
 # def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
 #     """Transforms an exponential decay curve to a linear curve.
-#     The exponential form has to be: I(t) = pk0 * exp(-t / t0)
+#     The exponential form is: I(t) = pk0 * exp(-t / t0)
 #     The linear form is: Ln(I(t)) = Ln(pk0) - t/t0"""
-#     if len(arr):
-#         match direction:
-#             case 1:  # positive going
-#                 y = arr
-#             case -1:  # negative going
-#                 y = -arr
-#             case _:
-#                 raise ValueError("Wrong direction")
-#         return np.log(y + 1.0)
+#     if len(arr) < 2:
+#         raise ValueError("Array must contain at least 2 points.")
+#
+#     if direction == 1:
+#         y = arr
+#     elif direction == -1:
+#         y = -arr
 #     else:
-#         raise ValueError("Array is empty")
+#         raise ValueError("Direction must be 1 or -1.")
+#
+#     # CONTROL STATEMENT: Guard against non-positive, zero, or NaN/Inf values
+#     if np.any(y <= 0.0) or np.any(np.isnan(y)) or np.any(np.isinf(y)):
+#         raise ValueError("Array contains non-positive, zero, or non-finite values incompatible with log conversion.")
+#
+#     # Mathematically exact log transformation (no distortion offset needed)
+#     return np.log(y)
 
 
 # @timing
@@ -868,28 +876,34 @@ def lin_fit(y_var, x_var):
     """
     Fits data to a linear relation: y = intercept + slope * x
     Manual implementation for Numba compatibility.
+    Filters out any NaN or Inf values before processing.
 
     Returns: slope, intercept, pearson_r, p_value, std_err, intercept_stderr
-    (Note: p_value and stderrs are returned as 0.0)
     """
-    n = len(x_var)
-    if n < 2 or len(y_var) != n:
+    # 1. Create a synchronized mask of valid, finite numbers for both arrays
+    valid_mask = np.isfinite(x_var) & np.isfinite(y_var)
+
+    # 2. Filter the arrays
+    clean_x = x_var[valid_mask]
+    clean_y = y_var[valid_mask]
+
+    n = len(clean_x)
+
+    # 3. Ensure we still have enough points to fit a line after filtering
+    if n < 2:
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-    # Check for NaNs in input vectors
-    if np.any(np.isnan(x_var)) or np.any(np.isnan(y_var)):
-        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-
-    # Calculate sums required for linear regression
-    S_x = np.sum(x_var)
-    S_y = np.sum(y_var)
-    S_xx = np.sum(x_var ** 2)
-    S_yy = np.sum(y_var ** 2)
-    S_xy = np.sum(x_var * y_var)
+    # Calculate sums required for linear regression using clean data
+    S_x = np.sum(clean_x)
+    S_y = np.sum(clean_y)
+    S_xx = np.sum(clean_x ** 2)
+    S_yy = np.sum(clean_y ** 2)
+    S_xy = np.sum(clean_x * clean_y)
 
     denom = n * S_xx - S_x ** 2
 
-    if denom <= 0.0 or np.isnan(denom):
+    # Since inputs are strictly finite, denom can no longer be NaN
+    if denom <= 0.0:
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     # Calculate Slope and Intercept
@@ -898,21 +912,69 @@ def lin_fit(y_var, x_var):
 
     # Calculate R value (Pearson coefficient)
     r_num = n * S_xy - S_x * S_y
+
     # Ensure square root argument is non-negative before root extraction
     y_term = max(0.0, n * S_yy - S_y ** 2)
     x_term = max(0.0, denom)
     r_den = np.sqrt(x_term * y_term)
 
-    # Check for NaN or zero denominator
-    if r_den == 0 or np.isnan(r_den):
+    # Check for zero denominator (NaN check is no longer necessary)
+    if r_den == 0:
         pearson_r = 0.0
     else:
         pearson_r = r_num / r_den
 
-    # P-value and Standard Errors are difficult to compute in nopython mode
-    # (requires t-distribution CDF). We return 0.0 to satisfy the unpacking
-    # signature expected by 'exp_fit'.
     return slope, intercept, pearson_r, 0.0, 0.0, 0.0
+# @njit
+# def lin_fit(y_var, x_var):
+#     """
+#     Fits data to a linear relation: y = intercept + slope * x
+#     Manual implementation for Numba compatibility.
+#
+#     Returns: slope, intercept, pearson_r, p_value, std_err, intercept_stderr
+#     (Note: p_value and stderrs are returned as 0.0)
+#     """
+#     n = len(x_var)
+#     if n < 2 or len(y_var) != n:
+#         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+#
+#     # Check for NaNs in input vectors
+#     if np.any(np.isnan(x_var)) or np.any(np.isnan(y_var)):
+#         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+#
+#     # Calculate sums required for linear regression
+#     S_x = np.sum(x_var)
+#     S_y = np.sum(y_var)
+#     S_xx = np.sum(x_var ** 2)
+#     S_yy = np.sum(y_var ** 2)
+#     S_xy = np.sum(x_var * y_var)
+#
+#     denom = n * S_xx - S_x ** 2
+#
+#     if denom <= 0.0 or np.isnan(denom):
+#         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+#
+#     # Calculate Slope and Intercept
+#     slope = (n * S_xy - S_x * S_y) / denom
+#     intercept = (S_y - slope * S_x) / n
+#
+#     # Calculate R value (Pearson coefficient)
+#     r_num = n * S_xy - S_x * S_y
+#     # Ensure square root argument is non-negative before root extraction
+#     y_term = max(0.0, n * S_yy - S_y ** 2)
+#     x_term = max(0.0, denom)
+#     r_den = np.sqrt(x_term * y_term)
+#
+#     # Check for NaN or zero denominator
+#     if r_den == 0 or np.isnan(r_den):
+#         pearson_r = 0.0
+#     else:
+#         pearson_r = r_num / r_den
+#
+#     # P-value and Standard Errors are difficult to compute in nopython mode
+#     # (requires t-distribution CDF). We return 0.0 to satisfy the unpacking
+#     # signature expected by 'exp_fit'.
+#     return slope, intercept, pearson_r, 0.0, 0.0, 0.0
 
 
 # @timing
@@ -920,38 +982,82 @@ def lin_fit(y_var, x_var):
 def exp_fit(response: np.ndarray, time: np.ndarray, direction: int):
     """Fits data to an exponential decay: I(t) = pk0 * exp(-t / t0).
     Returns fit_i_0, fit_pk0, fit_t0, pearson_r"""
-    if len(response) < 2 or len(time) < 2:
+    if direction != 1 and direction != -1:
         return 0.0, np.nan, np.nan, np.nan
 
-    # CONTROL STATEMENT: Check input polarity & invalid values upfront
-    if direction == 1 and np.any(response <= 0.0):
-        return 0.0, np.nan, np.nan, np.nan
-    elif direction == -1 and np.any(response >= 0.0):
-        return 0.0, np.nan, np.nan, np.nan
-    elif direction != 1 and direction != -1:
-        return 0.0, np.nan, np.nan, np.nan
+    # 1. Create a synchronized mask to keep only values with valid polarity and finite numbers
+    if direction == 1:
+        valid_mask = (response > 0.0) & np.isfinite(response) & np.isfinite(time)
+    else:
+        valid_mask = (response < 0.0) & np.isfinite(response) & np.isfinite(time)
 
-    if np.any(np.isnan(response)) or np.any(np.isnan(time)):
+    # 2. Apply the mask to both arrays simultaneously
+    clean_resp = response[valid_mask]
+    clean_time = time[valid_mask]
+
+    # 3. Ensure we have enough points left to perform a reliable fit
+    if len(clean_resp) < 4:
         return 0.0, np.nan, np.nan, np.nan
 
     # Shift time vector to relative onset (t_0 = 0) to prevent floating-point precision loss
-    t_rel = time - time[0]
+    t_rel = clean_time - clean_time[0]
 
     # Convert to linear space safely
-    lin_resp = exp_to_lin(response, direction)
+    lin_resp = exp_to_lin(clean_resp, direction)
 
     # Perform linear fit: Ln(I(t)) = Ln(pk0) - (1/t0) * t_rel
     slope, lin_pk0, pearson_r, _, _, _ = lin_fit(lin_resp, t_rel)
 
-    # A valid decay curve must have a negative slope in log space (slope = -1/tau)
-    if slope >= 0.0 or np.isnan(slope) or np.isnan(lin_pk0):
-        return 0.0, np.nan, np.nan, np.nan
+    if np.isnan(slope) or np.isnan(lin_pk0):
+        return 0.0, np.nan, np.nan, pearson_r
 
     fit_pk0 = np.exp(lin_pk0) * direction
     fit_t0 = -1.0 / slope
     fit_i_0 = 0.0
 
     return fit_i_0, fit_pk0, fit_t0, pearson_r
+# @njit
+# def exp_fit(response: np.ndarray, time: np.ndarray, direction: int):
+#     """Fits data to an exponential decay: I(t) = pk0 * exp(-t / t0).
+#     Returns fit_i_0, fit_pk0, fit_t0, pearson_r"""
+#     if len(response) < 4 or len(time) < 4:
+#         warnings.warn(f"Short response or time...")
+#         return 0.0, np.nan, np.nan, np.nan
+#
+#     # CONTROL STATEMENT: Check input polarity & invalid values upfront
+#     if direction == 1 and np.any(response <= 0.0):
+#         warnings.warn(f"response <= 0.0...")
+#         return 0.0, np.nan, np.nan, np.nan
+#     elif direction == -1 and np.any(response >= 0.0):
+#         warnings.warn(f"response >= 0.0...")
+#         return 0.0, np.nan, np.nan, np.nan
+#     elif direction != 1 and direction != -1:
+#         warnings.warn(f"wrong direction...")
+#         return 0.0, np.nan, np.nan, np.nan
+#
+#     if np.any(np.isnan(response)) or np.any(np.isnan(time)):
+#         warnings.warn(f"There are nan...")
+#         return 0.0, np.nan, np.nan, np.nan
+#
+#     # Shift time vector to relative onset (t_0 = 0) to prevent floating-point precision loss
+#     t_rel = time - time[0]
+#
+#     # Convert to linear space safely
+#     lin_resp = exp_to_lin(response, direction)
+#
+#     # Perform linear fit: Ln(I(t)) = Ln(pk0) - (1/t0) * t_rel
+#     slope, lin_pk0, pearson_r, _, _, _ = lin_fit(lin_resp, t_rel)
+#
+#     # A valid decay curve must have a negative slope in log space (slope = -1/tau)
+#     # if slope >= 0.0 or np.isnan(slope) or np.isnan(lin_pk0):  # TODO check this, I always prefer to have the values!!
+#     if np.isnan(slope) or np.isnan(lin_pk0):  # TODO check this, I always prefer to have the values!!
+#         return 0.0, np.nan, np.nan, pearson_r
+#
+#     fit_pk0 = np.exp(lin_pk0) * direction
+#     fit_t0 = -1.0 / slope
+#     fit_i_0 = 0.0
+#
+#     return fit_i_0, fit_pk0, fit_t0, pearson_r
 
 
 # @timing
