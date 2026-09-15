@@ -382,6 +382,7 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
         # rec.get_correlation(const["corr_start"], const["corr_end"])
 
     if const["show_everything"]:
+        rec.show_burst(const["kernel_length"])
         title = f"From {start:0>4} to {end:0>4}. Detected {const['event_type']}: "
         rec.show_all_events(title, True, const["adjust"], (const["rec_smoothed_width_rise"], const["rec_sharpness_rise"]))
         rec.show_events_aligned(title)

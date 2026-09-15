@@ -16,7 +16,7 @@ from scipy.ndimage import find_objects, label
 from scipy.signal import fftconvolve, correlate
 
 from lib_utility import (
-    conv_vector, down_sample_function_t, exp_decay, exp_fit, exp_to_lin, find_peaks_and_boundaries, get_names,
+    conv_vector, down_sample_function_t, exp_decay, exp_fit, find_peaks_and_boundaries, get_names,
     get_real_kernel_sd,
     lin_fit, make_name,
     parabolic_fit,
@@ -939,7 +939,6 @@ class loadRecord(base):
             return np.stack((self.time, self.resp, self.cdac), axis=0).T
         return None
 
-    @timing
     def get_info(self, from_what="file", parameter=""):
         match from_what:
             case 'file':
@@ -1820,7 +1819,7 @@ class Analyzer(Fourier):
                 not np.any(self.peaks)
                 or not np.any(self.der_peaks_decay)
                 or not self.peak_boundaries
-        ):
+                    ):
             self.peaks = np.zeros_like(self.peaks)
             self.der_peaks_decay = np.zeros_like(self.der_peaks_decay)
             self.peak_boundaries = []
@@ -1929,12 +1928,10 @@ class Analyzer(Fourier):
                 # Search strictly AFTER or AT the response peak up to the island end
                 slope_indices = (
                         np.where(self.der_peaks_decay[max_p_idx:end] > 0)[0] + max_p_idx
-                )
+                                    )
 
                 if slope_indices.size > 0:
-                    max_s_idx = slope_indices[
-                        np.argmax(self.der_peaks_decay[slope_indices])
-                    ]
+                    max_s_idx = slope_indices[np.argmax(self.der_peaks_decay[slope_indices])]
                     best_slopes.append(max_s_idx)
 
         # ---------------------------------------------------------
@@ -1970,9 +1967,7 @@ class Analyzer(Fourier):
             # Map surviving slopes back to their decay zero-cross interval
             interval_idx = np.searchsorted(slope_ends, best_slopes_arr)
 
-            valid_mask = (interval_idx < len(slope_starts)) & (
-                    slope_starts[interval_idx] <= best_slopes_arr
-            )
+            valid_mask = (interval_idx < len(slope_starts)) & (slope_starts[interval_idx] <= best_slopes_arr)
 
             valid_interval_idx = interval_idx[valid_mask]
             valid_starts = slope_starts[valid_interval_idx]
@@ -2168,6 +2163,10 @@ class EvtPro(Analyzer):
 
     def __init__(self, path_to_file="", initialize=True, location=0):
         super().__init__(path_to_file, initialize, location)
+        self.burst_threshold = None
+        self.burst_smoothed_ifreq = None
+        self.burst_continuous_ifreq = None
+        self.burst_continuous_time = None
         self.default_event = {
                 # --- Original Keys ---
                 "slope_peak_delta": None,  # Time difference between the rise-slope and the peak
@@ -2245,6 +2244,7 @@ class EvtPro(Analyzer):
 
         # 5. Evict the event from the main dictionary using its absolute time key
         self.events_attrs.pop(evt_time, None)
+
     # def _reject_event(self, evt_time: float, reason: str, msg: str = ""):
     #     """
     #     Handles cleanup, metrics tracking, and logging for rejected events
@@ -2314,15 +2314,11 @@ class EvtPro(Analyzer):
             sd_end = np.searchsorted(decay_slope_indices, next_pos, side="right")
 
             if sd_start == sd_end:
-                msg = (
-                        f"{evt_time:12.4f}[s] rejected (No decay slope found in region)"
-                )
+                msg = f"{evt_time:12.4f}[s] rejected (No decay slope found in region)"
                 self._reject_event(evt_time, "no_decay_slope_region", msg)
                 continue
 
-            abs_decay_slope_pos = decay_slope_indices[
-                sd_start
-            ]  # First decay slope after peak
+            abs_decay_slope_pos = decay_slope_indices[sd_start]  # First decay slope after peak
             decay_slope_value = float(self.derivative_decay[abs_decay_slope_pos])
             decay_slope_time = float(self.time[abs_decay_slope_pos])
 
@@ -2386,9 +2382,7 @@ class EvtPro(Analyzer):
         total_initial_events = len(evt_times_list)
 
         peak_times = self.time[self.peaks > 0]
-        pulse_times = (
-                self.time[self.pulses_peaks > 0] if self.cdac.size else np.array([])
-        )
+        pulse_times = (self.time[self.pulses_peaks > 0] if self.cdac.size else np.array([]))
 
         for i, evt_time in enumerate(evt_times_list):
             # =========================================================
@@ -2406,7 +2400,7 @@ class EvtPro(Analyzer):
             if (
                     p_idx < len(peak_times)
                     and peak_times[p_idx] < next_evt_start_time
-            ):
+                    ):
                 inter_time = peak_times[p_idx]
             else:
                 inter_time = next_evt_start_time
@@ -2416,7 +2410,7 @@ class EvtPro(Analyzer):
                 if (
                         pl_idx < len(pulse_times)
                         and pulse_times[pl_idx] < next_evt_start_time
-                ):
+                        ):
                     pulse_time = pulse_times[pl_idx]
                 else:
                     pulse_time = next_evt_start_time
@@ -2460,13 +2454,11 @@ class EvtPro(Analyzer):
                         )
                 continue
 
-            if not (t_segm[0] <= t_o_zs <= t_segm[-1]) or not (
-                    t_segm[0] <= t_o_zp <= t_segm[-1]
-            ):
+            if not (t_segm[0] <= t_o_zs <= t_segm[-1]) or not (t_segm[0] <= t_o_zp <= t_segm[-1]):
                 msg = (
                         f"{evt_time:12.4f}[s] rejected, zero crossings out of bounds by t_aft constraint. "
                         f"Segment: [{t_segm[0]:.4f}, {t_segm[-1]:.4f}], zs: {t_o_zs:.4f}, zp: {t_o_zp:.4f}"
-                )
+                        )
                 self._reject_event(evt_time, "zero_pass_error", msg)
                 continue
 
@@ -3324,8 +3316,8 @@ class EvtPro(Analyzer):
     @timing
     def get_auc(self, already_adjusted=True):
         b_amp = 0
-        fs = 1/self.t_delta
-        points = vtp(0.001,self.t_delta)
+        # fs = 1/self.t_delta
+        # points = vtp(0.001,self.t_delta)
         # RAM FIX: Iterate over a list of keys instead of deepcopying the whole dictionary
         initial_event_count = len(self.events_attrs)
         for evt_pos in list(self.events_attrs.keys()):
@@ -3457,7 +3449,9 @@ class EvtPro(Analyzer):
                 continue
 
             decay_slope = evt.get("decay_slope_val")
-            bad_slope_ratio = decay_slope is None or decay_slope / rise_slope >= 0.0 or abs(decay_slope) > abs(rise_slope)
+            bad_slope_ratio = decay_slope is None or decay_slope / rise_slope >= 0.0 or abs(decay_slope) > abs(
+                    rise_slope
+                    )
             if check_rule(
                     "rise_slope_val", bad_slope_ratio,
                     "wrong_slope_ratio", "max_decay_slope", decay_slope, ".2f"
@@ -3537,72 +3531,113 @@ class EvtPro(Analyzer):
         print("=" * 50 + "\n")
 
     @timing
-    def burst(self, kernel_length=0.5, min_num_ap=1):
+    def burst(self, kernel_length=0.5, min_num_evt=2):
         self.burst_attrs = {}
+
         # 1. Initialize all events as isolated by default
         for evt in self.events_attrs.values():
             evt["in_burst"] = False
             evt["burst_index"] = None
+
+        t_o_p = self.get_arr("t_o_p")
+        r_ifreq = self.get_arr("r_ifreq")
+
         # 2. SAFETY CHECK: Ensure there are enough events to calculate frequency
-        if len(self.get_arr("t_o_p")) < 2:
+        if len(t_o_p) < 2:
             print("Fewer than 2 events detected. Burst analysis mathematically impossible. Skipping.")
             self.ifreq_blocks = np.zeros_like(self.time)
             self.mfreq_blocks = np.zeros_like(self.time)
             return
-        ifreq_timecourse = np.array([self.get_arr("t_o_p"), self.get_arr("r_ifreq")])
-        ifreq_timecourse[1][0] = np.nanmin(ifreq_timecourse[1])
-        ifreq_timecourse_full = np.zeros_like(self.time)
-        # 1. Create a boolean mask where the full time array matches the event times
-        mask = np.isin(self.time, ifreq_timecourse[0])
-        # 2. Assign the frequencies into those specific 'True' slots
-        ifreq_timecourse_full[mask] = ifreq_timecourse[1]
+
+        # 3. RECONSTRUCT CONTINUOUS TIME & FREQUENCY
+        r_ifreq_clean = np.nan_to_num(r_ifreq, nan=0.0, posinf=0.0, neginf=0.0)
+
+        start_time = self.time[0]
+        end_time = self.time[-1]
+        total_points = int(np.round((end_time - start_time) / self.t_delta)) + 1
+        continuous_time = np.linspace(start_time, end_time, total_points)
+        continuous_ifreq_full = np.zeros(total_points)
+
+        # Calculate exact index placements for the events on the continuous timeline
+        event_indices = np.round((t_o_p - start_time) / self.t_delta).astype(int)
+        valid_mask = (event_indices >= 0) & (event_indices < total_points)
+        continuous_ifreq_full[event_indices[valid_mask]] = r_ifreq_clean[valid_mask]
+
+        # 4. MEMORY-EFFICIENT SMOOTHING & THRESHOLDING
         n_p = vtp(kernel_length, self.t_delta)
-        smoothed_ifreq, kernel_sd = smoothing(ifreq_timecourse_full, n_p, 2, 'g', 1 / self.t_delta)
-        kernel = conv_vector(n_p, 'g', 2)
+        sharpness = 8
+        smoothed_ifreq, kernel_sd = smoothing(continuous_ifreq_full, n_p, sharpness, 'g', 1 / self.t_delta)
+
+        kernel = conv_vector(n_p, 'g', sharpness)
         print(f"<----------------->In self.burst: kernel-SD = {get_real_kernel_sd(kernel, 1 / self.t_delta)}")
+
         single_pulse = np.zeros(2 * n_p)
-        single_pulse[n_p] = ifreq_timecourse[1][0]
+        single_pulse[n_p] = r_ifreq_clean[0] if len(r_ifreq_clean) > 0 else 1.0
         min_convolved = fftconvolve(single_pulse, kernel, mode='same')
         min_val = min_convolved[min_convolved > 0.0].max()
+
+        # Save parameters for lightweight plotting in show_burst
+        self.burst_continuous_time = continuous_time
+        self.burst_continuous_ifreq = continuous_ifreq_full
+        self.burst_smoothed_ifreq = smoothed_ifreq
+        self.burst_threshold = min_val
+
         smoothed_ifreq_bool = smoothed_ifreq > min_val
         smoothed_ifreq_norm = np.where(smoothed_ifreq_bool, 1.0, 0.0)
-        smoothed_mfreq_norm = np.copy(smoothed_ifreq_norm)
+
         # 'label' returns the labeled array and the number of features found
         labeled_array, section_count = label(smoothed_ifreq_norm)
         print(f"Number of sections (before): {section_count}")
+
         # OPTIMIZATION: Get slices for every burst in a single pass
         burst_slices = find_objects(labeled_array)
-        # for burst_index in range(1, section_count + 1):
-        for burst_index, burst_slice in enumerate(burst_slices, 1):
+
+        # Pre-allocate blocks matched to the original (discontinuous) time array size
+        self.ifreq_blocks = np.zeros_like(self.time)
+        self.mfreq_blocks = np.zeros_like(self.time)
+
+        valid_burst_count = 0
+
+        # 5. EXTRACT BURST FEATURES
+        for burst_slice in burst_slices:
             if burst_slice is None:
                 continue
-            # burst_slice is a tuple containing a 1D slice: (slice(start, end),)
+
+            # sl represents the bounds in the strictly continuous arrays
             sl = burst_slice[0]
-            # 1. INSTANTLY slice the data. No full-array searching.
-            temp_burst_ifreq = ifreq_timecourse_full[sl]
-            temp_burst_time = self.time[sl]
+
+            # 1. INSTANTLY slice the data on continuous timeline
+            temp_burst_ifreq = continuous_ifreq_full[sl]
+            temp_burst_time = continuous_time[sl]
             temp_nonzero_ifreq = temp_burst_ifreq > 0
             temp_events_count = np.sum(temp_nonzero_ifreq)
-            # 2. Reset the burst area to 0 directly using the slice
-            smoothed_ifreq_norm[sl] = 0.0
-            smoothed_mfreq_norm[sl] = 0.0
-            if temp_nonzero_ifreq.any() and temp_events_count >= min_num_ap:
+
+            if temp_nonzero_ifreq.any() and temp_events_count >= min_num_evt:
+                valid_burst_count += 1
+
                 tmp_burst_avg_ifreq = np.average(temp_burst_ifreq[temp_nonzero_ifreq][1:])
                 tmp_time_arr = temp_burst_time[temp_nonzero_ifreq]
                 tmp_min_time = tmp_time_arr.min()
                 tmp_max_time = tmp_time_arr.max()
-                # These are local searches on the tiny sliced array (Fast)
+
+                # 2. Map continuous bounds back to the discontinuous 'self.time' and 'self.resp' arrays
+                orig_time_mask = (self.time >= tmp_min_time) & (self.time <= tmp_max_time)
+
+                self.ifreq_blocks[orig_time_mask] = tmp_burst_avg_ifreq
+                self.mfreq_blocks[orig_time_mask] = temp_events_count / (tmp_max_time - tmp_min_time)
+
+                resp_mean = np.average(self.resp[orig_time_mask])
+
+                # 3. Calculate integration safely matching the original events array
+                evt_mask = (t_o_p >= tmp_min_time) & (t_o_p <= tmp_max_time)
+                integration = calculate_area(
+                        t_o_p[evt_mask], r_ifreq_clean[evt_mask] ** 2
+                        ) / np.abs(resp_mean + 40)
+
+                # 4. Record global position and attributes
                 tmp_min_time_pos = vtp_relative(tmp_min_time, temp_burst_time)
-                tmp_max_time_pos = vtp_relative(tmp_max_time, temp_burst_time)
-                # tmp_min_time_pos = np.where(temp_burst_time == tmp_min_time)[0][0]
-                # tmp_max_time_pos = np.where(temp_burst_time == tmp_max_time)[0][0]
-                # 3. Target the exact sub-slice directly using standard math
-                target_slice = slice(sl.start + tmp_min_time_pos, sl.start + tmp_max_time_pos)
-                smoothed_ifreq_norm[target_slice] = tmp_burst_avg_ifreq
-                smoothed_mfreq_norm[target_slice] = temp_events_count / (tmp_max_time - tmp_min_time)
-                # 4. INSTANTLY calculate the global position using the slice start index
                 tmp_burst_pos = sl.start + tmp_min_time_pos
-                mask = (ifreq_timecourse[0] >= tmp_min_time) & (ifreq_timecourse[0] <= tmp_max_time)
+
                 self.burst_attrs[tmp_burst_pos] = dict(
                         burst_start_time=tmp_min_time,
                         burst_end_time=tmp_max_time,
@@ -3611,25 +3646,367 @@ class EvtPro(Analyzer):
                         burst_max_ifreq=np.max(temp_burst_ifreq[temp_nonzero_ifreq]),
                         burst_mean_freq=temp_events_count / (tmp_max_time - tmp_min_time),
                         burst_freq_power=tmp_burst_avg_ifreq * (temp_events_count - 1),
-                        burst_index=burst_index,
-                        burst_depolarization=np.average(self.resp[sl]),
-                        burst_freq_integration=calculate_area(
-                                ifreq_timecourse[0][mask], ifreq_timecourse[1][mask] ** 2
-                                ) / np.abs(np.average(self.resp[sl]) + 40),
+                        burst_index=valid_burst_count,
+                        burst_depolarization=resp_mean,
+                        burst_freq_integration=integration,
                         )
+
                 # ADDITION: Tag the specific events that fall within this burst's timeframe
                 for evt in self.events_attrs.values():
                     if tmp_min_time <= evt["t_o_p"] <= tmp_max_time:
                         evt["in_burst"] = True
-                        evt["burst_index"] = burst_index
+                        evt["burst_index"] = valid_burst_count
 
-        self.ifreq_blocks = smoothed_ifreq_norm
-        self.mfreq_blocks = smoothed_mfreq_norm
-        # Relabeling to ensure continuous numbering if any bursts were disqualified (< 2 APs)
-        labeled_array, section_count = label(smoothed_ifreq_norm)
-        for burst_index, (burst_pos, attrs) in enumerate(self.burst_attrs.items(), 1):
-            attrs['burst_index'] = burst_index
-        print(f"Number of sections (after): {section_count}")
+        print(f"Number of sections (after): {valid_burst_count}")
+    # def burst(self, kernel_length=0.5, min_num_evt=2):
+    #     self.burst_attrs = {}
+    #     # 1. Initialize all events as isolated by default
+    #     for evt in self.events_attrs.values():
+    #         evt["in_burst"] = False
+    #         evt["burst_index"] = None
+    #     # 2. SAFETY CHECK: Ensure there are enough events to calculate frequency
+    #     if len(self.get_arr("t_o_p")) < 2:
+    #         print("Fewer than 2 events detected. Burst analysis mathematically impossible. Skipping.")
+    #         self.ifreq_blocks = np.zeros_like(self.time)
+    #         self.mfreq_blocks = np.zeros_like(self.time)
+    #         return
+    #     ifreq_timecourse = np.array([self.get_arr("t_o_p"), self.get_arr("r_ifreq")])
+    #     ifreq_timecourse[1][0] = np.nanmin(ifreq_timecourse[1])
+    #     ifreq_timecourse_full = np.zeros_like(self.time)
+    #     # 1. Create a boolean mask where the full time array matches the event times
+    #     mask = np.isin(self.time, ifreq_timecourse[0])
+    #     # 2. Assign the frequencies into those specific 'True' slots
+    #     ifreq_timecourse_full[mask] = ifreq_timecourse[1]
+    #     n_p = vtp(kernel_length, self.t_delta)
+    #     smoothed_ifreq, kernel_sd = smoothing(ifreq_timecourse_full, n_p, 2, 'g', 1 / self.t_delta)
+    #     kernel = conv_vector(n_p, 'g', 2)
+    #     print(f"<----------------->In self.burst: kernel-SD = {get_real_kernel_sd(kernel, 1 / self.t_delta)}")
+    #     single_pulse = np.zeros(2 * n_p)
+    #     single_pulse[n_p] = ifreq_timecourse[1][0]
+    #     min_convolved = fftconvolve(single_pulse, kernel, mode='same')
+    #     min_val = min_convolved[min_convolved > 0.0].max()
+    #     smoothed_ifreq_bool = smoothed_ifreq > min_val
+    #     smoothed_ifreq_norm = np.where(smoothed_ifreq_bool, 1.0, 0.0)
+    #     smoothed_mfreq_norm = np.copy(smoothed_ifreq_norm)
+    #     # 'label' returns the labeled array and the number of features found
+    #     labeled_array, section_count = label(smoothed_ifreq_norm)
+    #     print(f"Number of sections (before): {section_count}")
+    #     # OPTIMIZATION: Get slices for every burst in a single pass
+    #     burst_slices = find_objects(labeled_array)
+    #     # for burst_index in range(1, section_count + 1):
+    #     for burst_index, burst_slice in enumerate(burst_slices, 1):
+    #         if burst_slice is None:
+    #             continue
+    #         # burst_slice is a tuple containing a 1D slice: (slice(start, end),)
+    #         sl = burst_slice[0]
+    #         # 1. INSTANTLY slice the data. No full-array searching.
+    #         temp_burst_ifreq = ifreq_timecourse_full[sl]
+    #         temp_burst_time = self.time[sl]
+    #         temp_nonzero_ifreq = temp_burst_ifreq > 0
+    #         temp_events_count = np.sum(temp_nonzero_ifreq)
+    #         # 2. Reset the burst area to 0 directly using the slice
+    #         smoothed_ifreq_norm[sl] = 0.0
+    #         smoothed_mfreq_norm[sl] = 0.0
+    #         if temp_nonzero_ifreq.any() and temp_events_count >= min_num_evt:
+    #             tmp_burst_avg_ifreq = np.average(temp_burst_ifreq[temp_nonzero_ifreq][1:])
+    #             tmp_time_arr = temp_burst_time[temp_nonzero_ifreq]
+    #             tmp_min_time = tmp_time_arr.min()
+    #             tmp_max_time = tmp_time_arr.max()
+    #             # These are local searches on the tiny sliced array (Fast)
+    #             tmp_min_time_pos = vtp_relative(tmp_min_time, temp_burst_time)
+    #             tmp_max_time_pos = vtp_relative(tmp_max_time, temp_burst_time)
+    #             # tmp_min_time_pos = np.where(temp_burst_time == tmp_min_time)[0][0]
+    #             # tmp_max_time_pos = np.where(temp_burst_time == tmp_max_time)[0][0]
+    #             # 3. Target the exact sub-slice directly using standard math
+    #             target_slice = slice(sl.start + tmp_min_time_pos, sl.start + tmp_max_time_pos)
+    #             smoothed_ifreq_norm[target_slice] = tmp_burst_avg_ifreq
+    #             smoothed_mfreq_norm[target_slice] = temp_events_count / (tmp_max_time - tmp_min_time)
+    #             # 4. INSTANTLY calculate the global position using the slice start index
+    #             tmp_burst_pos = sl.start + tmp_min_time_pos
+    #             mask = (ifreq_timecourse[0] >= tmp_min_time) & (ifreq_timecourse[0] <= tmp_max_time)
+    #             self.burst_attrs[tmp_burst_pos] = dict(
+    #                     burst_start_time=tmp_min_time,
+    #                     burst_end_time=tmp_max_time,
+    #                     burst_length=(tmp_max_time - tmp_min_time),
+    #                     burst_avg_ifreq=tmp_burst_avg_ifreq,
+    #                     burst_max_ifreq=np.max(temp_burst_ifreq[temp_nonzero_ifreq]),
+    #                     burst_mean_freq=temp_events_count / (tmp_max_time - tmp_min_time),
+    #                     burst_freq_power=tmp_burst_avg_ifreq * (temp_events_count - 1),
+    #                     burst_index=burst_index,
+    #                     burst_depolarization=np.average(self.resp[sl]),
+    #                     burst_freq_integration=calculate_area(
+    #                             ifreq_timecourse[0][mask], ifreq_timecourse[1][mask] ** 2
+    #                             ) / np.abs(np.average(self.resp[sl]) + 40),
+    #                     )
+    #             # ADDITION: Tag the specific events that fall within this burst's timeframe
+    #             for evt in self.events_attrs.values():
+    #                 if tmp_min_time <= evt["t_o_p"] <= tmp_max_time:
+    #                     evt["in_burst"] = True
+    #                     evt["burst_index"] = burst_index
+    #
+    #     self.ifreq_blocks = smoothed_ifreq_norm
+    #     self.mfreq_blocks = smoothed_mfreq_norm
+    #     # Relabeling to ensure continuous numbering if any bursts were disqualified (< 2 APs)
+    #     labeled_array, section_count = label(smoothed_ifreq_norm)
+    #     for burst_index, (burst_pos, attrs) in enumerate(self.burst_attrs.items(), 1):
+    #         attrs['burst_index'] = burst_index
+    #     print(f"Number of sections (after): {section_count}")
+
+    @timing
+    def show_burst(self, title="Burst Detection Analysis"):
+        """
+        Visualizes the instantaneous frequency, the calculated threshold,
+        and the resulting burst boxes on two synchronized panels,
+        using pre-calculated data from the burst() method.
+        """
+        # Check for the existence of the arrays saved by the updated burst() method
+        if not hasattr(self, 'burst_attrs') or not hasattr(self, 'burst_smoothed_ifreq'):
+            print("No burst data found. Run burst() first.")
+            return
+
+        # SAFETY CHECK: Ensure there are enough events
+        if len(self.get_arr("t_o_p")) < 2:
+            print("Fewer than 2 events detected. Cannot visualize burst frequency.")
+            return
+
+        # Create two subplots stacked vertically, sharing only the X-axis
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+        plt.rcParams.update({'font.size': 8})
+
+        # =========================================================
+        # 1. RETRIEVE PRE-CALCULATED DATA
+        # =========================================================
+        continuous_time = self.burst_continuous_time
+        continuous_ifreq_full = self.burst_continuous_ifreq
+        smoothed_ifreq = self.burst_smoothed_ifreq
+        min_val = self.burst_threshold
+
+        # =========================================================
+        # 2. TOP PANEL (ax1): Raw Frequencies & Burst Boxes
+        # =========================================================
+        # Zero (Dashed Line)
+        ax1.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label="Zero Hz")
+
+        # Raw Instantaneous Frequency (Continuous array trace)
+        ax1.plot(continuous_time, continuous_ifreq_full, 'k', alpha=0.5, label="Raw Inst. Freq")
+
+        # Burst Boxes (Outline only)
+        burst_labeled = False
+        for burst_pos, attrs in self.burst_attrs.items():
+            start = attrs['burst_start_time']
+            end = attrs['burst_end_time']
+            avg_ifreq = attrs['burst_avg_ifreq']
+
+            # Trace the perimeter of the box
+            ax1.plot(
+                    [start, start, end, end, start],
+                    [0, avg_ifreq, avg_ifreq, 0, 0],
+                    color='orange',
+                    alpha=0.75,
+                    linewidth=1.5,
+                    label="Detected Burst" if not burst_labeled else None
+                    )
+            burst_labeled = True
+
+        # =========================================================
+        # 3. BOTTOM PANEL (ax2): Smoothed Frequency & Threshold
+        # =========================================================
+        # Zero (Dashed Line)
+        ax2.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label="Zero Hz")
+
+        # Smoothed Instantaneous Frequency (Line)
+        ax2.plot(continuous_time, smoothed_ifreq, 'b-', linewidth=1.5, label="Smoothed Freq")
+
+        # Threshold (Dashed Line)
+        ax2.axhline(y=min_val, color='r', linestyle='--', linewidth=2, label=f"Threshold ({min_val:.2f} Hz)")
+
+        # =========================================================
+        # 4. FORMATTING
+        # =========================================================
+        sweep_idx = getattr(self, 'sweep_index', 0)
+
+        # Top Panel Formatting
+        ax1.set_title(f"Sweep {sweep_idx} - {title} ({len(self.burst_attrs)} bursts detected)")
+        ax1.set_ylabel("Raw Freq (Hz)")
+        ax1.legend(loc='upper right', framealpha=0.8)
+
+        # Bottom Panel Formatting
+        ax2.set_xlabel("Time (s)")
+        ax2.set_ylabel("Smoothed Freq (Hz)")
+        ax2.legend(loc='upper right', framealpha=0.8)
+
+        plt.tight_layout()
+
+        # =========================================================
+        # 5. DYNAMIC AUTO-SAVE BLOCK
+        # =========================================================
+        start_s = int(self.time[0])
+        end_s = int(self.time[-1])
+        bursts_num = len(self.burst_attrs)
+
+        try:
+            file_name = self.get_info('file', 'name').replace(".", "_")
+            file_parent_base = self.get_info('file', 'parent')
+
+            target_dir = os.path.join(file_parent_base, file_name) + os.sep
+            os.makedirs(target_dir, exist_ok=True)
+
+            out_name = f"{target_dir}{file_name}_{sweep_idx:0>2}_{start_s:0>4}_{end_s:0>4}_burst_analysis_{bursts_num}.png"
+        except Exception as e:
+            print(f"Name resolution failed: {e}. Using fallback name.")
+            out_name = f"burst_analysis_{sweep_idx:0>2}_{start_s:0>4}_{end_s:0>4}_{bursts_num}.png"
+
+        fig.savefig(out_name, dpi=300, bbox_inches='tight')
+
+        # =========================================================
+        # 6. ASYNC RAM CLEARING BLOCK
+        # =========================================================
+        def on_close(event):
+            event.canvas.figure.clear()
+            plt.close(event.canvas.figure)
+            gc.collect()
+
+        fig.canvas.mpl_connect('close_event', on_close)
+        plt.show(block=False)
+        fig.canvas.draw()
+    # def show_burst(self, kernel_length=0.5, title="Burst Detection Analysis"):
+    #     """
+    #     Visualizes the instantaneous frequency, the calculated threshold,
+    #     and the resulting burst boxes on two synchronized panels.
+    #     """
+    #     if not hasattr(self, 'burst_attrs') or not self.burst_attrs:
+    #         print("No burst data found. Run burst() first.")
+    #         return
+    #
+    #     # SAFETY CHECK: Ensure there are enough events to calculate frequency
+    #     if len(self.get_arr("t_o_p")) < 2:
+    #         print("Fewer than 2 events detected. Cannot visualize burst frequency.")
+    #         return
+    #
+    #     # Create two subplots stacked vertically, sharing only the X-axis
+    #     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    #     plt.rcParams.update({'font.size': 8})
+    #
+    #     # =========================================================
+    #     # 1. RECONSTRUCT CONTINUOUS TIME & FREQUENCY
+    #     # =========================================================
+    #     t_o_p = self.get_arr("t_o_p")
+    #     r_ifreq = self.get_arr("r_ifreq")
+    #
+    #     # Safely handle any NaN calculations on the first event without injecting baseline
+    #     r_ifreq_clean = np.nan_to_num(r_ifreq, nan=0.0, posinf=0.0, neginf=0.0)
+    #
+    #     # Reconstruct a strictly continuous time array to bridge gaps
+    #     start_time = self.time[0]
+    #     end_time = self.time[-1]
+    #
+    #     # Calculate total points based on t_delta
+    #     total_points = int(np.round((end_time - start_time) / self.t_delta)) + 1
+    #     continuous_time = np.linspace(start_time, end_time, total_points)
+    #
+    #     continuous_ifreq_full = np.zeros(total_points)
+    #
+    #     # Calculate exact index placements for the events on the continuous timeline
+    #     event_indices = np.round((t_o_p - start_time) / self.t_delta).astype(int)
+    #
+    #     # Safety bounds check
+    #     valid_mask = (event_indices >= 0) & (event_indices < total_points)
+    #     continuous_ifreq_full[event_indices[valid_mask]] = r_ifreq_clean[valid_mask]
+    #
+    #     n_p = vtp(kernel_length, self.t_delta)
+    #     smoothed_ifreq, kernel_sd = smoothing(continuous_ifreq_full, n_p, 2, 'g', 1 / self.t_delta)
+    #
+    #     kernel = conv_vector(n_p, 'g', 2)
+    #     single_pulse = np.zeros(2 * n_p)
+    #     single_pulse[n_p] = r_ifreq_clean[0] if len(r_ifreq_clean) > 0 else 1.0
+    #     min_convolved = fftconvolve(single_pulse, kernel, mode='same')
+    #     min_val = min_convolved[min_convolved > 0.0].max()
+    #
+    #     # =========================================================
+    #     # 2. TOP PANEL (ax1): Raw Frequencies & Burst Boxes
+    #     # =========================================================
+    #     # Zero (Dashed Line)
+    #     ax1.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label=f"Zero Hz)")
+    #     # Raw Instantaneous Frequency (Dots)
+    #     ax1.plot(continuous_time, continuous_ifreq_full, 'k', alpha=0.5, label="Raw Inst. Freq")
+    #
+    #     # Burst Boxes (Outline only)
+    #     burst_labeled = False
+    #     for burst_pos, attrs in self.burst_attrs.items():
+    #         start = attrs['burst_start_time']
+    #         end = attrs['burst_end_time']
+    #         avg_ifreq = attrs['burst_avg_ifreq']
+    #
+    #         # Trace the perimeter of the box: bottom-left, top-left, top-right, bottom-right, bottom-left
+    #         ax1.plot(
+    #                 [start, start, end, end, start],
+    #                 [0, avg_ifreq, avg_ifreq, 0, 0],
+    #                 color='orange',
+    #                 alpha=0.75,
+    #                 linewidth=1.5,
+    #                 label="Detected Burst" if not burst_labeled else None
+    #                 )
+    #         burst_labeled = True
+    #
+    #     # =========================================================
+    #     # 3. BOTTOM PANEL (ax2): Smoothed Frequency & Threshold
+    #     # =========================================================
+    #     # Zero (Dashed Line)
+    #     ax2.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label=f"Zero Hz)")
+    #     # Smoothed Instantaneous Frequency (Line)
+    #     ax2.plot(continuous_time, smoothed_ifreq, 'b', linewidth=1.5, label="Smoothed Freq")
+    #     # Threshold (Dashed Line)
+    #     ax2.axhline(y=min_val, color='r', linestyle='--', linewidth=2, label=f"Threshold ({min_val:.2f} Hz)")
+    #
+    #     # =========================================================
+    #     # 4. FORMATTING
+    #     # =========================================================
+    #     sweep_idx = getattr(self, 'sweep_index', 0)
+    #
+    #     # Top Panel Formatting
+    #     ax1.set_title(f"Sweep {sweep_idx} - {title} ({len(self.burst_attrs)} bursts detected)")
+    #     ax1.set_ylabel("Raw Freq (Hz)")
+    #     ax1.legend(loc='upper right', framealpha=0.8)
+    #
+    #     # Bottom Panel Formatting
+    #     ax2.set_xlabel("Time (s)")
+    #     ax2.set_ylabel("Smoothed Freq (Hz)")
+    #     ax2.legend(loc='upper right', framealpha=0.8)
+    #
+    #     plt.tight_layout()
+    #
+    #     # =========================================================
+    #     # 5. DYNAMIC AUTO-SAVE BLOCK
+    #     # =========================================================
+    #     start_s = int(self.time[0])
+    #     end_s = int(self.time[-1])
+    #     bursts_num = len(self.burst_attrs)
+    #
+    #     try:
+    #         file_name = self.get_info('file', 'name').replace(".", "_")
+    #         file_parent_base = self.get_info('file', 'parent')
+    #
+    #         target_dir = os.path.join(file_parent_base, file_name) + os.sep
+    #         os.makedirs(target_dir, exist_ok=True)
+    #
+    #         out_name = f"{target_dir}{file_name}_{sweep_idx:0>2}_{start_s:0>4}_{end_s:0>4}_burst_analysis_{bursts_num}.png"
+    #     except Exception as e:
+    #         print(f"Name resolution failed: {e}. Using fallback name.")
+    #         out_name = f"burst_analysis_{sweep_idx:0>2}_{start_s:0>4}_{end_s:0>4}_{bursts_num}.png"
+    #
+    #     fig.savefig(out_name, dpi=300, bbox_inches='tight')
+    #
+    #     # =========================================================
+    #     # 6. ASYNC RAM CLEARING BLOCK
+    #     # =========================================================
+    #     def on_close(event):
+    #         event.canvas.figure.clear()
+    #         plt.close(event.canvas.figure)
+    #         gc.collect()
+    #
+    #     fig.canvas.mpl_connect('close_event', on_close)
+    #     plt.show(block=False)
+    #     fig.canvas.draw()
 
     @timing
     def get_correlation(self, start=0, end=1800):
@@ -3781,20 +4158,20 @@ class EvtPro(Analyzer):
                             )
                 events_labeled = True
 
-        if hasattr(self, 'ifreq_blocks') and self.ifreq_blocks.size > 0:
-            ax1.plot(self.time, self.ifreq_blocks, "g", lw=2.0, label="Instant Freq")
-            ax1.plot(self.time, self.mfreq_blocks, "r:", lw=2.0, label="Mean Freq")
+        # if hasattr(self, 'ifreq_blocks') and self.ifreq_blocks.size > 0:
+        #     ax1.plot(self.time, self.ifreq_blocks, "g", lw=2.0, label="Instant Freq")
+        #     ax1.plot(self.time, self.mfreq_blocks, "r:", lw=2.0, label="Mean Freq")
         # if self.ifreq_blocks.size:
         #     idx_blocks = np.nonzero(self.ifreq_blocks)[0]
         #     if idx_blocks.size > 0:
         #         ax1.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
         #         ax1.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
 
-            # burst_freq_power = np.array(
-            #         [self.get_arr("burst_start_time", "burst"),
-            #          self.get_arr("burst_freq_power", "burst")]
-            #         )
-            # ax1.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
+        # burst_freq_power = np.array(
+        #         [self.get_arr("burst_start_time", "burst"),
+        #          self.get_arr("burst_freq_power", "burst")]
+        #         )
+        # ax1.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
 
         ax1.set_title(f"{self.sweep_index=} {title} ({len(self.events_attrs)} events)")
         ax1.set_ylabel("Amplitude")

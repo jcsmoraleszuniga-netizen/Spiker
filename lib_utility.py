@@ -1049,8 +1049,8 @@ def exp_fit(response: np.ndarray, time: np.ndarray, direction: int):
 #     slope, lin_pk0, pearson_r, _, _, _ = lin_fit(lin_resp, t_rel)
 #
 #     # A valid decay curve must have a negative slope in log space (slope = -1/tau)
-#     # if slope >= 0.0 or np.isnan(slope) or np.isnan(lin_pk0):  # TODO check this, I always prefer to have the values!!
-#     if np.isnan(slope) or np.isnan(lin_pk0):  # TODO check this, I always prefer to have the values!!
+#     # if slope >= 0.0 or np.isnan(slope) or np.isnan(lin_pk0):
+#     if np.isnan(slope) or np.isnan(lin_pk0):
 #         return 0.0, np.nan, np.nan, pearson_r
 #
 #     fit_pk0 = np.exp(lin_pk0) * direction
