@@ -7,6 +7,9 @@ import random
 import warnings
 from itertools import pairwise, repeat
 from typing import List, Any
+
+from scipy.stats import rv_discrete
+
 from lib_gui import get_record_from_dialog, manage_settings, show_plot
 from numpy import ndarray, dtype
 from pyabf import ABF
@@ -312,138 +315,6 @@ def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
     del fig, ax1, ax2
     gc.collect()
 
-
-# @timing
-# def plot_rec(rec, title="No Title.", values_x=(0.0, 0.0), max_slope=0.0):
-#     """
-#     Displays two vertically stacked plots sharing the X-axis.
-#     Plots all points in the recording without decimation, while retaining
-#     exact indices and vlines for accurate, fast peak rendering using
-#     blended transforms to keep markers viewport-centered on Y.
-#     """
-#     fig, (ax1, ax2) = plt.subplots(
-#             2, 1, sharex=True, figsize=(9, 7),
-#             gridspec_kw={'height_ratios': [1, 1]}
-#             )
-#
-#     # ---------------------------------------------------------
-#     # DYNAMIC SCALING (NORMALIZED TO AXES FRACTION 0.0 - 0.5)
-#     # ---------------------------------------------------------
-#     # Max peak line extent will occupy up to 30% above/below center (0.5 +/- 0.3)
-#     max_abs_peak = np.max(np.abs(rec.peaks)) if len(rec.peaks) > 0 else 1.0
-#     if max_abs_peak == 0: max_abs_peak = 1.0
-#     norm_peaks = (np.abs(rec.peaks) / max_abs_peak) * 0.3
-#
-#     max_abs_der_peak = np.max(np.abs(rec.der_peaks_rise)) if len(rec.der_peaks_rise) > 0 else 1.0
-#     if max_abs_der_peak == 0: max_abs_der_peak = 1.0
-#     norm_der_peaks = (np.abs(rec.der_peaks_rise) / max_abs_der_peak) * 0.3
-#
-#     # --- Array Indexing Setup ---
-#     idx_p = np.nonzero(rec.peaks)[0]
-#     idx_dp = np.nonzero(rec.der_peaks_rise)[0]
-#     idx_zp = np.nonzero(rec.zero_pass_rise)[0]
-#
-#     idx_bounds = []
-#     if hasattr(rec, 'peak_boundaries') and rec.peak_boundaries:
-#         for _, start, end in rec.peak_boundaries:
-#             idx_bounds.extend([start, min(end - 1, len(rec.time) - 1)])
-#     idx_bounds = np.array(idx_bounds, dtype=int)
-#
-#     # --- Formatting both axes ---
-#     for ax in [ax1, ax2]:
-#         ax.axhline(y=0.0, color="k", linestyle='--', alpha=0.5)
-#         for x_val in values_x:
-#             ax.axvline(x=x_val, color="r", linestyle='--', alpha=0.6)
-#
-#     # ---------------------------------------------------------
-#     # TOP PLOT (REC)
-#     # ---------------------------------------------------------
-#     ax1.plot(rec.time, rec.resp, "k", linewidth=2.5, label="Response")
-#
-#     # Draw vertical lines centered at y=0.5 in Axes space (viewport plane)
-#     ax1.vlines(
-#             x=rec.time[idx_p],
-#             ymin=0.5 - norm_peaks[idx_p],
-#             ymax=0.5 + norm_peaks[idx_p],
-#             colors="r",
-#             linewidth=2.0,
-#             alpha=1.0,
-#             transform=ax1.get_xaxis_transform()
-#             )
-#
-#     # Draw boundary markers centered at y=0.5 with fixed fractional height
-#     if len(idx_bounds) > 0:
-#         ax1.vlines(
-#                 x=rec.time[idx_bounds],
-#                 ymin=0.4,
-#                 ymax=0.6,
-#                 colors="g",
-#                 linewidth=2.0,
-#                 alpha=0.5,
-#                 linestyle='--',
-#                 transform=ax1.get_xaxis_transform()
-#                 )
-#
-#     ax1.plot(rec.time, rec.peak_noise, "r:", alpha=0.75)
-#     ax1.set_ylabel("Response (rec)")
-#     ax1.set_title(title)
-#
-#     # ---------------------------------------------------------
-#     # BOTTOM PLOT (DER)
-#     # ---------------------------------------------------------
-#     ax2.axhline(y=max_slope, color="k", linestyle='--', alpha=0.5)
-#     ax2.plot(rec.time, rec.derivative, "b", linewidth=2.5, label="Derivative")
-#
-#     # Draw derivative peak lines centered at y=0.5 in Axes space
-#     ax2.vlines(
-#             x=rec.time[idx_dp],
-#             ymin=0.5 - norm_der_peaks[idx_dp],
-#             ymax=0.5 + norm_der_peaks[idx_dp],
-#             colors="r",
-#             linewidth=2.0,
-#             alpha=1.0,
-#             transform=ax2.get_xaxis_transform()
-#             )
-#
-#     # Zero pass markers centered at y=0.5 with relative scale
-#     max_zp = np.max(np.abs(rec.zero_pass_rise)) if len(rec.zero_pass_rise) > 0 else 1.0
-#     if max_zp == 0: max_zp = 1.0
-#     norm_zp = (np.abs(rec.zero_pass_rise) / max_zp) * 0.15
-#
-#     ax2.vlines(
-#             x=rec.time[idx_zp],
-#             ymin=0.5 - norm_zp[idx_zp],
-#             ymax=0.5 + norm_zp[idx_zp],
-#             colors="g",
-#             linewidth=2.0,
-#             alpha=0.5,
-#             linestyle='--',
-#             transform=ax2.get_xaxis_transform()
-#             )
-#
-#     ax2.plot(rec.time, rec.der_peak_noise_rise, "r:", alpha=0.75)
-#     ax2.set_ylabel("Derivative (rec.derivative)")
-#     ax2.set_xlabel("Time")
-#
-#     plt.tight_layout()
-#
-#     # --- Matplotlib Event Loop & RAM Clearing ---
-#     plt.show(block=False)
-#     fig.canvas.draw()
-#
-#     def on_close(event):
-#         event.canvas.stop_event_loop()
-#
-#     cid = fig.canvas.mpl_connect('close_event', on_close)
-#     fig.canvas.start_event_loop(timeout=0)
-#
-#     fig.canvas.mpl_disconnect(cid)
-#     fig.clear()
-#     plt.close(fig)
-#     plt.close('all')
-#     del fig, ax1, ax2
-#     gc.collect()
-#
 
 def plot_smooth(temp_rec, temp_smooth_rise, temp_smooth_decay, title="Original versus smoothed recordings."):
     """
@@ -2164,12 +2035,12 @@ class EvtPro(Analyzer):
     def __init__(self, path_to_file="", initialize=True, location=0):
         super().__init__(path_to_file, initialize, location)
         self.burst_threshold = None
-        self.burst_smoothed_ifreq = None
+        self.burst_smoothed_position = None
         self.burst_continuous_ifreq = None
         self.burst_continuous_time = None
         self.default_event = {
                 # --- Original Keys ---
-                "slope_peak_delta": None,  # Time difference between the rise-slope and the peak
+                "slope_peak_delta_time": None,  # Time difference between the rise-slope and the peak
                 "t_o_p"           : None,  # Time of the alignment-peak
                 "t_o_s"           : None,  # time of the max slope
                 "t_o_zs"          : None,  # time of zero pass start
@@ -2198,13 +2069,13 @@ class EvtPro(Analyzer):
                 # --- Newly Added Keys (From screen_events logic) ---
                 "rise_slope_val"  : None,  # RISE velocity value used in constraints
                 "decay_slope_val" : None,  # DECAY velocity value used in constraints
-                "peak_error"      : None,  # Deviation between original peak time and zero-pass peak time
+                "peak_error_time"      : None,  # Deviation between original peak time and zero-pass peak time
                 "rise_time_peak"  : None,  # Activation rise time (original peak time - zero pass start)
                 "rise_time_der"   : None,
                 # Rise time calculated via derivative crossings (zero pass peak - zero pass start)
-                "slope_pos_delta" : None,  # Index delta from max slope to peak
-                "start_pos_delta" : None,  # Index delta from zero pass start to peak
-                "peak_pos_delta"  : None,  # Index delta from zero-pass peak to alignment peak
+                # "slope_pos_delta" : None,  # Index delta from max slope to peak
+                # "start_pos_delta" : None,  # Index delta from zero pass start to peak
+                # "peak_pos_delta"  : None,  # Index delta from zero-pass peak to alignment peak
                 }
         self.events_attrs = {}
         self.rejected_counts = {}
@@ -2244,20 +2115,6 @@ class EvtPro(Analyzer):
 
         # 5. Evict the event from the main dictionary using its absolute time key
         self.events_attrs.pop(evt_time, None)
-
-    # def _reject_event(self, evt_time: float, reason: str, msg: str = ""):
-    #     """
-    #     Handles cleanup, metrics tracking, and logging for rejected events
-    #     across the entire processing pipeline.
-    #     """
-    #     if msg:
-    #         print(msg)
-    #
-    #     # Track the rejection reason globally
-    #     self.rejected_counts[reason] = self.rejected_counts.get(reason, 0) + 1
-    #
-    #     # Evict the event from the main dictionary using its absolute time key
-    #     self.events_attrs.pop(evt_time, None)
 
     @timing
     def _select_events(self):
@@ -2514,221 +2371,6 @@ class EvtPro(Analyzer):
                 f" Accepted events: {len(self.events_attrs)}, Rejected: {total_initial_events - len(self.events_attrs)}"
                 )
 
-    # @timing
-    # def _select_events(self):
-    #     """
-    #     Extracts foundational kinetic properties for detected peaks and initializes valid putative events.
-    #
-    #     Iterates over all identified peak indices, utilizing the interval between consecutive
-    #     peaks to define regional boundaries. Isolates the maximum rising slope,
-    #     calculates the absolute start time of the event rise, and refines the peak location.
-    #     """
-    #     self.events_attrs = {}
-    #
-    #     # 1. Evaluate the condition ONCE and store the indices
-    #     peak_indices = np.where(self.peaks > 0)[0]
-    #     self.peaks[peak_indices] = 1.0
-    #     num_peaks = len(peak_indices)
-    #
-    #     if num_peaks == 0:
-    #         print("No peaks detected.")
-    #         return
-    #
-    #     # 2. Extract marker indices ONCE for fast bounded lookups
-    #     slope_indices = np.where(self.der_peaks_rise > 0)[0]
-    #     zc_indices = np.where(self.zero_pass_rise != 0)[0]  # Restored to match crossing_point (!= 0) behavior
-    #
-    #     for i in range(num_peaks):
-    #         evt_pos = peak_indices[i]
-    #         evt_time = float(self.time[evt_pos])
-    #
-    #         # Define regional boundaries exactly as before
-    #         prev_pos = peak_indices[i - 1] if i > 0 else 0
-    #         next_pos = peak_indices[i + 1] if i < num_peaks - 1 else len(self.time) - 1
-    #
-    #         # ---------------------------------------------------------
-    #         # 1. Restored Bounded Slope Lookup
-    #         # Equivalent to: np.where(self.der_peaks[prev_pos:evt_pos + 1] > 0)
-    #         # ---------------------------------------------------------
-    #         s_start = np.searchsorted(slope_indices, prev_pos, side='left')
-    #         s_end = np.searchsorted(slope_indices, evt_pos, side='right')
-    #
-    #         if s_start == s_end:
-    #             msg = f"{evt_time:12.4f}[s] rejected (No slope found in region)"
-    #             self._reject_event(evt_time, "no_slope_region", msg)
-    #             continue
-    #
-    #         abs_slope_pos = slope_indices[s_end - 1]  # [-1] grabs the exact same slope as the old code
-    #         slope_value = float(self.derivative[abs_slope_pos])
-    #         slope_time = float(self.time[abs_slope_pos])
-    #
-    #         # ---------------------------------------------------------
-    #         # 2. Restored Bounded Zero-Crossings Lookup
-    #         # ---------------------------------------------------------
-    #         # zs_p equivalent: Find the LAST non-zero pass in [max(0, prev_pos - 1), abs_slope_pos]
-    #         zs_limit = max(0, prev_pos - 1)
-    #         zc_s_start = np.searchsorted(zc_indices, zs_limit, side='left')
-    #         zc_s_end = np.searchsorted(zc_indices, abs_slope_pos, side='right')
-    #
-    #         if zc_s_start == zc_s_end:
-    #             msg = f"{evt_time:12.4f}[s] rejected (crossings not found)"
-    #             self._reject_event(evt_time, "crossings_not_found", msg)
-    #             continue
-    #
-    #         abs_zs_pos = zc_indices[zc_s_end - 1]
-    #
-    #         # zp_p equivalent: Find the FIRST non-zero pass in [abs_slope_pos, next_pos]
-    #         zc_p_start = np.searchsorted(zc_indices, abs_slope_pos, side='left')
-    #         zc_p_end = np.searchsorted(zc_indices, next_pos, side='right')
-    #
-    #         if zc_p_start == zc_p_end:
-    #             msg = f"{evt_time:12.4f}[s] rejected (crossings not found)"
-    #             self._reject_event(evt_time, "crossings_not_found", msg)
-    #             continue
-    #
-    #         abs_zp_pos = zc_indices[zc_p_start]
-    #
-    #         # ---------------------------------------------------------
-    #         # 3. Direct Absolute Assignment
-    #         # ---------------------------------------------------------
-    #         t_o_zs = float(self.time[abs_zs_pos])
-    #         t_o_zp = float(self.time[abs_zp_pos])
-    #
-    #         self.events_attrs[evt_time] = self.default_event.copy()
-    #         self.events_attrs[evt_time].update(
-    #                 {
-    #                         "t_o_s"                : slope_time,
-    #                         "slope_peak_delta_time": evt_time - slope_time,
-    #                         "rise_slope_val"       : slope_value,
-    #                         "t_o_zs"               : t_o_zs,
-    #                         "t_o_zp"               : t_o_zp,
-    #                         "peak_error_time"      : evt_time - t_o_zp,
-    #                         "rise_time_peak"       : evt_time - t_o_zs,
-    #                         "rise_time_der"        : t_o_zp - t_o_zs
-    #                         }
-    #                 )
-    #
-    #     print(f" Accepted events: {len(self.events_attrs)}, Rejected: {num_peaks - len(self.events_attrs)}")
-    #
-    # @timing
-    # def _event_sections(self, t_aft, baseline_time, peak_to_peak=0.001):
-    #     """
-    #     Extracts and isolates the specific waveform data arrays for each validated event
-    #     using absolute time boundaries.
-    #     """
-    #     evt_times_list = list(self.events_attrs.keys())
-    #     total_initial_events = len(evt_times_list)
-    #
-    #     # Pre-extract global event times to eliminate O(N) slicing inside the loop
-    #     peak_times = self.time[self.peaks > 0]
-    #     pulse_times = self.time[self.pulses_peaks > 0] if self.cdac.size else np.array([])
-    #
-    #     for i, evt_time in enumerate(evt_times_list):
-    #         # =========================================================
-    #         # 1. TIME-BASED BOUNDARY CALCULATIONS
-    #         # =========================================================
-    #         if i + 1 < len(evt_times_list):
-    #             next_evt_time = evt_times_list[i + 1]
-    #             next_evt_start_time = self.events_attrs[next_evt_time]["t_o_zs"]
-    #         else:
-    #             next_evt_start_time = float(self.time[-1])
-    #
-    #         # Fast binary lookup for trailing peaks (interferences)
-    #         # Replaces: decay_peaks_idx = np.where(decay_peaks > 0)[0]
-    #         p_idx = np.searchsorted(peak_times, evt_time + peak_to_peak, side='right')
-    #         if p_idx < len(peak_times) and peak_times[p_idx] < next_evt_start_time:
-    #             inter_time = peak_times[p_idx]
-    #         else:
-    #             inter_time = next_evt_start_time
-    #
-    #         # Fast binary lookup for pulse artifacts
-    #         # Replaces: pulse_idx = np.argmax(self.pulses_peaks[decay_region])
-    #         if pulse_times.size > 0:
-    #             pl_idx = np.searchsorted(pulse_times, evt_time, side='right')
-    #             if pl_idx < len(pulse_times) and pulse_times[pl_idx] < next_evt_start_time:
-    #                 pulse_time = pulse_times[pl_idx]
-    #             else:
-    #                 pulse_time = next_evt_start_time
-    #         else:
-    #             pulse_time = next_evt_start_time
-    #
-    #         # Boundaries structurally identical to original
-    #         end_roi_time = min(evt_time + t_aft, inter_time, pulse_time, next_evt_start_time)
-    #
-    #         t_o_zs = self.events_attrs[evt_time]["t_o_zs"]
-    #         t_o_zp = self.events_attrs[evt_time]["t_o_zp"]
-    #         start_roi_time = max(float(self.time[0]), evt_time - t_aft, t_o_zs - baseline_time)
-    #
-    #         # =========================================================
-    #         # 2. DYNAMIC SLICING VIA vtp_relative
-    #         # =========================================================
-    #         start_roi_idx = vtp_relative(start_roi_time, self.time)
-    #         end_roi_idx = vtp_relative(end_roi_time, self.time)
-    #
-    #         roi_slice = slice(start_roi_idx, end_roi_idx + 1)
-    #
-    #         # Rejections kept identical
-    #         if end_roi_idx - start_roi_idx < 2:
-    #             msg = f"{evt_time:12.4f}[s] rejected, short response. Indices: {start_roi_idx} to {end_roi_idx}"
-    #             self._reject_event(evt_time, "short_response", msg)
-    #             continue
-    #
-    #         t_segm = self.time[roi_slice]
-    #         if t_segm.size > 0 and (t_segm[-1] - t_segm[0]) > 1.0:
-    #             print(f"Event at {evt_time:.4f}s exceeds 1s: length = {t_segm[-1] - t_segm[0]:.4f}s")
-    #
-    #         if len(t_segm) == 0:
-    #             self._reject_event(
-    #                     evt_time, "empty_segment", f"{evt_time:12.4f}[s] rejected, completely empty segment."
-    #                     )
-    #             continue
-    #
-    #         if not (t_segm[0] <= t_o_zs <= t_segm[-1]) or not (t_segm[0] <= t_o_zp <= t_segm[-1]):
-    #             msg = (f"{evt_time:12.4f}[s] rejected, zero crossings out of bounds by t_aft constraint. "
-    #                    f"Segment: [{t_segm[0]:.4f}, {t_segm[-1]:.4f}], zs: {t_o_zs:.4f}, zp: {t_o_zp:.4f}")
-    #             self._reject_event(evt_time, "zero_pass_error", msg)
-    #             continue
-    #
-    #         # =========================================================
-    #         # 3. SEGMENT EXTRACTION & FORMATTING
-    #         # =========================================================
-    #         # z_segm = reset_array(self.zero_pass[roi_slice], vtp_relative(t_o_zp, t_segm))
-    #         z_segm = np.zeros_like(self.time[roi_slice])  # Blank canvas for the segment
-    #         z_segm[vtp_relative(t_o_zp, t_segm)] = 1  # Safely force end to 1
-    #         z_segm[vtp_relative(t_o_zs, t_segm)] = -1
-    #
-    #         p_segm = self.peaks[roi_slice]
-    #         num_peaks_in_segm = np.count_nonzero(p_segm > 0)
-    #
-    #         if num_peaks_in_segm > 1:
-    #             p_segm = reset_array(self.peaks[roi_slice], vtp_relative(evt_time, t_segm))
-    #         elif num_peaks_in_segm == 0:
-    #             self._reject_event(
-    #                     evt_time, "no_peak_detected", f"{evt_time:12.4f}[s] rejected, No peaks detected in final slice."
-    #                     )
-    #             continue
-    #
-    #         r_segm = self.resp[roi_slice]
-    #         d_segm = self.derivative[roi_slice]
-    #
-    #         t_o_s = self.events_attrs[evt_time]["t_o_s"]
-    #         s_segm = reset_array(self.der_peaks_rise[roi_slice], vtp_relative(t_o_s, t_segm))
-    #
-    #         # Consolidated dictionary updates
-    #         self.events_attrs[evt_time].update(
-    #                 {
-    #                         "end_time": float(t_segm[-1] - evt_time),
-    #                         "t_segm"  : t_segm,
-    #                         "r_segm"  : r_segm,
-    #                         "p_segm"  : p_segm,
-    #                         "d_segm"  : d_segm,
-    #                         "s_segm"  : s_segm,
-    #                         "z_segm"  : z_segm
-    #                         }
-    #                 )
-    #
-    #     print(f" Accepted events: {len(self.events_attrs)}, Rejected: {total_initial_events - len(self.events_attrs)}")
-
     @timing
     def get_evt(self, peak_to_peak: float = 0.01, t_aft=0.04, baseline_time=0.002):
         """
@@ -2749,7 +2391,7 @@ class EvtPro(Analyzer):
         self._event_sections(t_aft, baseline_time, peak_to_peak)
 
     @timing
-    def identify_evoked(  # TODO finish this function, incomplete
+    def identify_evoked(
             self,
             pp1_r1=1.0, pp1_r2=1.08, pp1_artifact=0.002,
             pp2_r1=2.0, pp2_r2=2.08, pp2_artifact=0.002,
@@ -3531,7 +3173,13 @@ class EvtPro(Analyzer):
         print("=" * 50 + "\n")
 
     @timing
-    def burst(self, kernel_length=0.5, min_num_evt=2):
+    def find_bursts(self, kernel_length=0.5, min_num_evt=2):
+        """
+        Identifies and analyzes bursts of events by reconstructing a continuous
+        timeline, converting event occurrences into unit pulses (0s and 1s), and
+        applying Gaussian smoothing. Extracts morphological and statistical features
+        for each validated burst.
+        """
         self.burst_attrs = {}
 
         # 1. Initialize all events as isolated by default
@@ -3541,6 +3189,11 @@ class EvtPro(Analyzer):
 
         t_o_p = self.get_arr("t_o_p")
         r_ifreq = self.get_arr("r_ifreq")
+
+        # Retrieve event-level property arrays
+        amplitudes = self.get_arr("amplitude")
+        r_aucs = self.get_arr("r_auc")
+        rise_slopes = self.get_arr("rise_slope_val")
 
         # 2. SAFETY CHECK: Ensure there are enough events to calculate frequency
         if len(t_o_p) < 2:
@@ -3563,30 +3216,37 @@ class EvtPro(Analyzer):
         valid_mask = (event_indices >= 0) & (event_indices < total_points)
         continuous_ifreq_full[event_indices[valid_mask]] = r_ifreq_clean[valid_mask]
 
+        # --- BINARY CONVERSION FOR SMOOTHING ---
+        # Convert event occurrences to binary unit pulses (1.0 if event present, 0.0 otherwise)
+        single_amp = 100.0
+        continuous_binary = np.where(continuous_ifreq_full > 0.0, single_amp, 0.0)
+
         # 4. MEMORY-EFFICIENT SMOOTHING & THRESHOLDING
         n_p = vtp(kernel_length, self.t_delta)
         sharpness = 8
-        smoothed_ifreq, kernel_sd = smoothing(continuous_ifreq_full, n_p, sharpness, 'g', 1 / self.t_delta)
+        smoothed_position, kernel_sd = smoothing(continuous_binary, n_p, sharpness, 'g', 1 / self.t_delta)
 
         kernel = conv_vector(n_p, 'g', sharpness)
         print(f"<----------------->In self.burst: kernel-SD = {get_real_kernel_sd(kernel, 1 / self.t_delta)}")
 
+        # --- SIMPLIFIED SINGLE PULSE THRESHOLDING ---
+        # With binary pulses, a single event is strictly represented by a unit impulse (single_amp)
         single_pulse = np.zeros(2 * n_p)
-        single_pulse[n_p] = r_ifreq_clean[0] if len(r_ifreq_clean) > 0 else 1.0
+        single_pulse[n_p] = single_amp
         min_convolved = fftconvolve(single_pulse, kernel, mode='same')
         min_val = min_convolved[min_convolved > 0.0].max()
 
         # Save parameters for lightweight plotting in show_burst
         self.burst_continuous_time = continuous_time
         self.burst_continuous_ifreq = continuous_ifreq_full
-        self.burst_smoothed_ifreq = smoothed_ifreq
+        self.burst_smoothed_position = smoothed_position
         self.burst_threshold = min_val
 
-        smoothed_ifreq_bool = smoothed_ifreq > min_val
-        smoothed_ifreq_norm = np.where(smoothed_ifreq_bool, 1.0, 0.0)
+        smoothed_pos_bool = smoothed_position > min_val
+        smoothed_pos_norm = np.where(smoothed_pos_bool, 1.0, 0.0)
 
         # 'label' returns the labeled array and the number of features found
-        labeled_array, section_count = label(smoothed_ifreq_norm)
+        labeled_array, section_count = label(smoothed_pos_norm)
         print(f"Number of sections (before): {section_count}")
 
         # OPTIMIZATION: Get slices for every burst in a single pass
@@ -3607,20 +3267,31 @@ class EvtPro(Analyzer):
             sl = burst_slice[0]
 
             # 1. INSTANTLY slice the data on continuous timeline
-            temp_burst_ifreq = continuous_ifreq_full[sl]
+            temp_burst_ifreq = continuous_ifreq_full[sl]  # Retains original amplitude frequencies
             temp_burst_time = continuous_time[sl]
-            temp_nonzero_ifreq = temp_burst_ifreq > 0
+            temp_smoothed_pos = smoothed_position[sl]  # Smoothed binary response for shape metrics
+            temp_nonzero_ifreq = temp_burst_ifreq > 0  # boolean mask
             temp_events_count = np.sum(temp_nonzero_ifreq)
 
             if temp_nonzero_ifreq.any() and temp_events_count >= min_num_evt:
                 valid_burst_count += 1
 
-                tmp_burst_avg_ifreq = np.average(temp_burst_ifreq[temp_nonzero_ifreq][1:])
+                tmp_burst_avg_ifreq = np.average(temp_burst_ifreq[temp_nonzero_ifreq][1:])  # First event removed
                 tmp_time_arr = temp_burst_time[temp_nonzero_ifreq]
                 tmp_min_time = tmp_time_arr.min()
                 tmp_max_time = tmp_time_arr.max()
 
-                # 2. Map continuous bounds back to the discontinuous 'self.time' and 'self.resp' arrays
+                # Slice event-level attributes corresponding to events within this burst window
+                evt_mask = (t_o_p >= tmp_min_time) & (t_o_p <= tmp_max_time)
+                b_evt_amps = amplitudes[evt_mask] if len(amplitudes) > 0 else np.array([])
+                b_evt_aucs = r_aucs[evt_mask] if len(r_aucs) > 0 else np.array([])
+                b_evt_rslopes = rise_slopes[evt_mask] if len(rise_slopes) > 0 else np.array([])
+
+                mean_evt_amp = float(np.mean(b_evt_amps)) if len(b_evt_amps) > 0 else 0.0
+                mean_evt_auc = float(np.mean(b_evt_aucs)) if len(b_evt_aucs) > 0 else 0.0
+                mean_evt_rslope = float(np.mean(b_evt_rslopes)) if len(b_evt_rslopes) > 0 else 0.0
+
+                # 2. Map continuous bounds back to discontinuous 'self.time' and 'self.resp' arrays
                 orig_time_mask = (self.time >= tmp_min_time) & (self.time <= tmp_max_time)
 
                 self.ifreq_blocks[orig_time_mask] = tmp_burst_avg_ifreq
@@ -3629,128 +3300,47 @@ class EvtPro(Analyzer):
                 resp_mean = np.average(self.resp[orig_time_mask])
 
                 # 3. Calculate integration safely matching the original events array
-                evt_mask = (t_o_p >= tmp_min_time) & (t_o_p <= tmp_max_time)
-                integration = calculate_area(
-                        t_o_p[evt_mask], r_ifreq_clean[evt_mask] ** 2
-                        ) / np.abs(resp_mean + 40)
+                integration = calculate_area(temp_burst_time, temp_smoothed_pos)
+
+                # Extract shape statistics from the smoothed Gaussian response safely
+                total_pos = np.sum(temp_smoothed_pos)
+                if total_pos > 0:
+                    p = temp_smoothed_pos / total_pos
+                    dist = rv_discrete(values=(temp_burst_time, p))
+                    b_skew = float(dist.stats(moments="s"))
+                    b_kurt = float(dist.stats(moments="k"))
+                else:
+                    b_skew, b_kurt = 0.0, 0.0
 
                 # 4. Record global position and attributes
                 tmp_min_time_pos = vtp_relative(tmp_min_time, temp_burst_time)
-                tmp_burst_pos = sl.start + tmp_min_time_pos
 
-                self.burst_attrs[tmp_burst_pos] = dict(
+                self.burst_attrs[tmp_min_time] = dict(
                         burst_start_time=tmp_min_time,
                         burst_end_time=tmp_max_time,
                         burst_length=(tmp_max_time - tmp_min_time),
+                        burst_n_evts=temp_events_count,
+                        burst_evt_amp=mean_evt_amp,
+                        burst_evt_auc=mean_evt_auc,
+                        burst_evt_rslope=mean_evt_rslope,
                         burst_avg_ifreq=tmp_burst_avg_ifreq,
                         burst_max_ifreq=np.max(temp_burst_ifreq[temp_nonzero_ifreq]),
                         burst_mean_freq=temp_events_count / (tmp_max_time - tmp_min_time),
                         burst_freq_power=tmp_burst_avg_ifreq * (temp_events_count - 1),
                         burst_index=valid_burst_count,
                         burst_depolarization=resp_mean,
-                        burst_freq_integration=integration,
+                        burst_pos_integration=integration,
+                        burst_skewness=b_skew,
+                        burst_kurtosis=b_kurt,
                         )
 
-                # ADDITION: Tag the specific events that fall within this burst's timeframe
+                # Tag specific events falling within this burst timeframe
                 for evt in self.events_attrs.values():
                     if tmp_min_time <= evt["t_o_p"] <= tmp_max_time:
                         evt["in_burst"] = True
                         evt["burst_index"] = valid_burst_count
 
         print(f"Number of sections (after): {valid_burst_count}")
-    # def burst(self, kernel_length=0.5, min_num_evt=2):
-    #     self.burst_attrs = {}
-    #     # 1. Initialize all events as isolated by default
-    #     for evt in self.events_attrs.values():
-    #         evt["in_burst"] = False
-    #         evt["burst_index"] = None
-    #     # 2. SAFETY CHECK: Ensure there are enough events to calculate frequency
-    #     if len(self.get_arr("t_o_p")) < 2:
-    #         print("Fewer than 2 events detected. Burst analysis mathematically impossible. Skipping.")
-    #         self.ifreq_blocks = np.zeros_like(self.time)
-    #         self.mfreq_blocks = np.zeros_like(self.time)
-    #         return
-    #     ifreq_timecourse = np.array([self.get_arr("t_o_p"), self.get_arr("r_ifreq")])
-    #     ifreq_timecourse[1][0] = np.nanmin(ifreq_timecourse[1])
-    #     ifreq_timecourse_full = np.zeros_like(self.time)
-    #     # 1. Create a boolean mask where the full time array matches the event times
-    #     mask = np.isin(self.time, ifreq_timecourse[0])
-    #     # 2. Assign the frequencies into those specific 'True' slots
-    #     ifreq_timecourse_full[mask] = ifreq_timecourse[1]
-    #     n_p = vtp(kernel_length, self.t_delta)
-    #     smoothed_ifreq, kernel_sd = smoothing(ifreq_timecourse_full, n_p, 2, 'g', 1 / self.t_delta)
-    #     kernel = conv_vector(n_p, 'g', 2)
-    #     print(f"<----------------->In self.burst: kernel-SD = {get_real_kernel_sd(kernel, 1 / self.t_delta)}")
-    #     single_pulse = np.zeros(2 * n_p)
-    #     single_pulse[n_p] = ifreq_timecourse[1][0]
-    #     min_convolved = fftconvolve(single_pulse, kernel, mode='same')
-    #     min_val = min_convolved[min_convolved > 0.0].max()
-    #     smoothed_ifreq_bool = smoothed_ifreq > min_val
-    #     smoothed_ifreq_norm = np.where(smoothed_ifreq_bool, 1.0, 0.0)
-    #     smoothed_mfreq_norm = np.copy(smoothed_ifreq_norm)
-    #     # 'label' returns the labeled array and the number of features found
-    #     labeled_array, section_count = label(smoothed_ifreq_norm)
-    #     print(f"Number of sections (before): {section_count}")
-    #     # OPTIMIZATION: Get slices for every burst in a single pass
-    #     burst_slices = find_objects(labeled_array)
-    #     # for burst_index in range(1, section_count + 1):
-    #     for burst_index, burst_slice in enumerate(burst_slices, 1):
-    #         if burst_slice is None:
-    #             continue
-    #         # burst_slice is a tuple containing a 1D slice: (slice(start, end),)
-    #         sl = burst_slice[0]
-    #         # 1. INSTANTLY slice the data. No full-array searching.
-    #         temp_burst_ifreq = ifreq_timecourse_full[sl]
-    #         temp_burst_time = self.time[sl]
-    #         temp_nonzero_ifreq = temp_burst_ifreq > 0
-    #         temp_events_count = np.sum(temp_nonzero_ifreq)
-    #         # 2. Reset the burst area to 0 directly using the slice
-    #         smoothed_ifreq_norm[sl] = 0.0
-    #         smoothed_mfreq_norm[sl] = 0.0
-    #         if temp_nonzero_ifreq.any() and temp_events_count >= min_num_evt:
-    #             tmp_burst_avg_ifreq = np.average(temp_burst_ifreq[temp_nonzero_ifreq][1:])
-    #             tmp_time_arr = temp_burst_time[temp_nonzero_ifreq]
-    #             tmp_min_time = tmp_time_arr.min()
-    #             tmp_max_time = tmp_time_arr.max()
-    #             # These are local searches on the tiny sliced array (Fast)
-    #             tmp_min_time_pos = vtp_relative(tmp_min_time, temp_burst_time)
-    #             tmp_max_time_pos = vtp_relative(tmp_max_time, temp_burst_time)
-    #             # tmp_min_time_pos = np.where(temp_burst_time == tmp_min_time)[0][0]
-    #             # tmp_max_time_pos = np.where(temp_burst_time == tmp_max_time)[0][0]
-    #             # 3. Target the exact sub-slice directly using standard math
-    #             target_slice = slice(sl.start + tmp_min_time_pos, sl.start + tmp_max_time_pos)
-    #             smoothed_ifreq_norm[target_slice] = tmp_burst_avg_ifreq
-    #             smoothed_mfreq_norm[target_slice] = temp_events_count / (tmp_max_time - tmp_min_time)
-    #             # 4. INSTANTLY calculate the global position using the slice start index
-    #             tmp_burst_pos = sl.start + tmp_min_time_pos
-    #             mask = (ifreq_timecourse[0] >= tmp_min_time) & (ifreq_timecourse[0] <= tmp_max_time)
-    #             self.burst_attrs[tmp_burst_pos] = dict(
-    #                     burst_start_time=tmp_min_time,
-    #                     burst_end_time=tmp_max_time,
-    #                     burst_length=(tmp_max_time - tmp_min_time),
-    #                     burst_avg_ifreq=tmp_burst_avg_ifreq,
-    #                     burst_max_ifreq=np.max(temp_burst_ifreq[temp_nonzero_ifreq]),
-    #                     burst_mean_freq=temp_events_count / (tmp_max_time - tmp_min_time),
-    #                     burst_freq_power=tmp_burst_avg_ifreq * (temp_events_count - 1),
-    #                     burst_index=burst_index,
-    #                     burst_depolarization=np.average(self.resp[sl]),
-    #                     burst_freq_integration=calculate_area(
-    #                             ifreq_timecourse[0][mask], ifreq_timecourse[1][mask] ** 2
-    #                             ) / np.abs(np.average(self.resp[sl]) + 40),
-    #                     )
-    #             # ADDITION: Tag the specific events that fall within this burst's timeframe
-    #             for evt in self.events_attrs.values():
-    #                 if tmp_min_time <= evt["t_o_p"] <= tmp_max_time:
-    #                     evt["in_burst"] = True
-    #                     evt["burst_index"] = burst_index
-    #
-    #     self.ifreq_blocks = smoothed_ifreq_norm
-    #     self.mfreq_blocks = smoothed_mfreq_norm
-    #     # Relabeling to ensure continuous numbering if any bursts were disqualified (< 2 APs)
-    #     labeled_array, section_count = label(smoothed_ifreq_norm)
-    #     for burst_index, (burst_pos, attrs) in enumerate(self.burst_attrs.items(), 1):
-    #         attrs['burst_index'] = burst_index
-    #     print(f"Number of sections (after): {section_count}")
 
     @timing
     def show_burst(self, title="Burst Detection Analysis"):
@@ -3760,7 +3350,7 @@ class EvtPro(Analyzer):
         using pre-calculated data from the burst() method.
         """
         # Check for the existence of the arrays saved by the updated burst() method
-        if not hasattr(self, 'burst_attrs') or not hasattr(self, 'burst_smoothed_ifreq'):
+        if not hasattr(self, 'burst_attrs') or not hasattr(self, 'burst_smoothed_position'):
             print("No burst data found. Run burst() first.")
             return
 
@@ -3778,7 +3368,7 @@ class EvtPro(Analyzer):
         # =========================================================
         continuous_time = self.burst_continuous_time
         continuous_ifreq_full = self.burst_continuous_ifreq
-        smoothed_ifreq = self.burst_smoothed_ifreq
+        smoothed_pos = self.burst_smoothed_position
         min_val = self.burst_threshold
 
         # =========================================================
@@ -3790,35 +3380,35 @@ class EvtPro(Analyzer):
         # Raw Instantaneous Frequency (Continuous array trace)
         ax1.plot(continuous_time, continuous_ifreq_full, 'k', alpha=0.5, label="Raw Inst. Freq")
 
-        # Burst Boxes (Outline only)
-        burst_labeled = False
-        for burst_pos, attrs in self.burst_attrs.items():
-            start = attrs['burst_start_time']
-            end = attrs['burst_end_time']
-            avg_ifreq = attrs['burst_avg_ifreq']
-
-            # Trace the perimeter of the box
-            ax1.plot(
-                    [start, start, end, end, start],
-                    [0, avg_ifreq, avg_ifreq, 0, 0],
-                    color='orange',
-                    alpha=0.75,
-                    linewidth=1.5,
-                    label="Detected Burst" if not burst_labeled else None
-                    )
-            burst_labeled = True
-
         # =========================================================
         # 3. BOTTOM PANEL (ax2): Smoothed Frequency & Threshold
         # =========================================================
         # Zero (Dashed Line)
-        ax2.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label="Zero Hz")
+        ax2.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label="Zero")
 
         # Smoothed Instantaneous Frequency (Line)
-        ax2.plot(continuous_time, smoothed_ifreq, 'b-', linewidth=1.5, label="Smoothed Freq")
+        ax2.plot(continuous_time, smoothed_pos, 'b-', linewidth=1.5, label="Smoothed positon")
 
         # Threshold (Dashed Line)
-        ax2.axhline(y=min_val, color='r', linestyle='--', linewidth=2, label=f"Threshold ({min_val:.2f} Hz)")
+        ax2.axhline(y=min_val, color='r', linestyle='--', linewidth=2, label=f"Threshold ({min_val:.2f})")
+
+        # Burst Boxes (Outline only)
+        burst_labeled = False
+        for burst_time, attrs in self.burst_attrs.items():
+            start = attrs['burst_start_time']
+            end = attrs['burst_end_time']
+            freq_auc = attrs['burst_pos_integration']
+
+            # Trace the perimeter of the box
+            ax2.plot(
+                    [start, start, end, end, start],
+                    [0, freq_auc, freq_auc, 0, 0],
+                    color='orange',
+                    alpha=1.0,
+                    linewidth=1.5,
+                    label="Burst position AUC" if not burst_labeled else None
+                    )
+            burst_labeled = True
 
         # =========================================================
         # 4. FORMATTING
@@ -3827,12 +3417,12 @@ class EvtPro(Analyzer):
 
         # Top Panel Formatting
         ax1.set_title(f"Sweep {sweep_idx} - {title} ({len(self.burst_attrs)} bursts detected)")
-        ax1.set_ylabel("Raw Freq (Hz)")
+        ax1.set_ylabel("Raw frequency (Hz)")
         ax1.legend(loc='upper right', framealpha=0.8)
 
         # Bottom Panel Formatting
         ax2.set_xlabel("Time (s)")
-        ax2.set_ylabel("Smoothed Freq (Hz)")
+        ax2.set_ylabel("Smoothed position")
         ax2.legend(loc='upper right', framealpha=0.8)
 
         plt.tight_layout()
@@ -3869,144 +3459,6 @@ class EvtPro(Analyzer):
         fig.canvas.mpl_connect('close_event', on_close)
         plt.show(block=False)
         fig.canvas.draw()
-    # def show_burst(self, kernel_length=0.5, title="Burst Detection Analysis"):
-    #     """
-    #     Visualizes the instantaneous frequency, the calculated threshold,
-    #     and the resulting burst boxes on two synchronized panels.
-    #     """
-    #     if not hasattr(self, 'burst_attrs') or not self.burst_attrs:
-    #         print("No burst data found. Run burst() first.")
-    #         return
-    #
-    #     # SAFETY CHECK: Ensure there are enough events to calculate frequency
-    #     if len(self.get_arr("t_o_p")) < 2:
-    #         print("Fewer than 2 events detected. Cannot visualize burst frequency.")
-    #         return
-    #
-    #     # Create two subplots stacked vertically, sharing only the X-axis
-    #     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    #     plt.rcParams.update({'font.size': 8})
-    #
-    #     # =========================================================
-    #     # 1. RECONSTRUCT CONTINUOUS TIME & FREQUENCY
-    #     # =========================================================
-    #     t_o_p = self.get_arr("t_o_p")
-    #     r_ifreq = self.get_arr("r_ifreq")
-    #
-    #     # Safely handle any NaN calculations on the first event without injecting baseline
-    #     r_ifreq_clean = np.nan_to_num(r_ifreq, nan=0.0, posinf=0.0, neginf=0.0)
-    #
-    #     # Reconstruct a strictly continuous time array to bridge gaps
-    #     start_time = self.time[0]
-    #     end_time = self.time[-1]
-    #
-    #     # Calculate total points based on t_delta
-    #     total_points = int(np.round((end_time - start_time) / self.t_delta)) + 1
-    #     continuous_time = np.linspace(start_time, end_time, total_points)
-    #
-    #     continuous_ifreq_full = np.zeros(total_points)
-    #
-    #     # Calculate exact index placements for the events on the continuous timeline
-    #     event_indices = np.round((t_o_p - start_time) / self.t_delta).astype(int)
-    #
-    #     # Safety bounds check
-    #     valid_mask = (event_indices >= 0) & (event_indices < total_points)
-    #     continuous_ifreq_full[event_indices[valid_mask]] = r_ifreq_clean[valid_mask]
-    #
-    #     n_p = vtp(kernel_length, self.t_delta)
-    #     smoothed_ifreq, kernel_sd = smoothing(continuous_ifreq_full, n_p, 2, 'g', 1 / self.t_delta)
-    #
-    #     kernel = conv_vector(n_p, 'g', 2)
-    #     single_pulse = np.zeros(2 * n_p)
-    #     single_pulse[n_p] = r_ifreq_clean[0] if len(r_ifreq_clean) > 0 else 1.0
-    #     min_convolved = fftconvolve(single_pulse, kernel, mode='same')
-    #     min_val = min_convolved[min_convolved > 0.0].max()
-    #
-    #     # =========================================================
-    #     # 2. TOP PANEL (ax1): Raw Frequencies & Burst Boxes
-    #     # =========================================================
-    #     # Zero (Dashed Line)
-    #     ax1.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label=f"Zero Hz)")
-    #     # Raw Instantaneous Frequency (Dots)
-    #     ax1.plot(continuous_time, continuous_ifreq_full, 'k', alpha=0.5, label="Raw Inst. Freq")
-    #
-    #     # Burst Boxes (Outline only)
-    #     burst_labeled = False
-    #     for burst_pos, attrs in self.burst_attrs.items():
-    #         start = attrs['burst_start_time']
-    #         end = attrs['burst_end_time']
-    #         avg_ifreq = attrs['burst_avg_ifreq']
-    #
-    #         # Trace the perimeter of the box: bottom-left, top-left, top-right, bottom-right, bottom-left
-    #         ax1.plot(
-    #                 [start, start, end, end, start],
-    #                 [0, avg_ifreq, avg_ifreq, 0, 0],
-    #                 color='orange',
-    #                 alpha=0.75,
-    #                 linewidth=1.5,
-    #                 label="Detected Burst" if not burst_labeled else None
-    #                 )
-    #         burst_labeled = True
-    #
-    #     # =========================================================
-    #     # 3. BOTTOM PANEL (ax2): Smoothed Frequency & Threshold
-    #     # =========================================================
-    #     # Zero (Dashed Line)
-    #     ax2.axhline(y=0, color='k', linestyle='--', linewidth=1, alpha=0.5, label=f"Zero Hz)")
-    #     # Smoothed Instantaneous Frequency (Line)
-    #     ax2.plot(continuous_time, smoothed_ifreq, 'b', linewidth=1.5, label="Smoothed Freq")
-    #     # Threshold (Dashed Line)
-    #     ax2.axhline(y=min_val, color='r', linestyle='--', linewidth=2, label=f"Threshold ({min_val:.2f} Hz)")
-    #
-    #     # =========================================================
-    #     # 4. FORMATTING
-    #     # =========================================================
-    #     sweep_idx = getattr(self, 'sweep_index', 0)
-    #
-    #     # Top Panel Formatting
-    #     ax1.set_title(f"Sweep {sweep_idx} - {title} ({len(self.burst_attrs)} bursts detected)")
-    #     ax1.set_ylabel("Raw Freq (Hz)")
-    #     ax1.legend(loc='upper right', framealpha=0.8)
-    #
-    #     # Bottom Panel Formatting
-    #     ax2.set_xlabel("Time (s)")
-    #     ax2.set_ylabel("Smoothed Freq (Hz)")
-    #     ax2.legend(loc='upper right', framealpha=0.8)
-    #
-    #     plt.tight_layout()
-    #
-    #     # =========================================================
-    #     # 5. DYNAMIC AUTO-SAVE BLOCK
-    #     # =========================================================
-    #     start_s = int(self.time[0])
-    #     end_s = int(self.time[-1])
-    #     bursts_num = len(self.burst_attrs)
-    #
-    #     try:
-    #         file_name = self.get_info('file', 'name').replace(".", "_")
-    #         file_parent_base = self.get_info('file', 'parent')
-    #
-    #         target_dir = os.path.join(file_parent_base, file_name) + os.sep
-    #         os.makedirs(target_dir, exist_ok=True)
-    #
-    #         out_name = f"{target_dir}{file_name}_{sweep_idx:0>2}_{start_s:0>4}_{end_s:0>4}_burst_analysis_{bursts_num}.png"
-    #     except Exception as e:
-    #         print(f"Name resolution failed: {e}. Using fallback name.")
-    #         out_name = f"burst_analysis_{sweep_idx:0>2}_{start_s:0>4}_{end_s:0>4}_{bursts_num}.png"
-    #
-    #     fig.savefig(out_name, dpi=300, bbox_inches='tight')
-    #
-    #     # =========================================================
-    #     # 6. ASYNC RAM CLEARING BLOCK
-    #     # =========================================================
-    #     def on_close(event):
-    #         event.canvas.figure.clear()
-    #         plt.close(event.canvas.figure)
-    #         gc.collect()
-    #
-    #     fig.canvas.mpl_connect('close_event', on_close)
-    #     plt.show(block=False)
-    #     fig.canvas.draw()
 
     @timing
     def get_correlation(self, start=0, end=1800):
@@ -4158,21 +3610,6 @@ class EvtPro(Analyzer):
                             )
                 events_labeled = True
 
-        # if hasattr(self, 'ifreq_blocks') and self.ifreq_blocks.size > 0:
-        #     ax1.plot(self.time, self.ifreq_blocks, "g", lw=2.0, label="Instant Freq")
-        #     ax1.plot(self.time, self.mfreq_blocks, "r:", lw=2.0, label="Mean Freq")
-        # if self.ifreq_blocks.size:
-        #     idx_blocks = np.nonzero(self.ifreq_blocks)[0]
-        #     if idx_blocks.size > 0:
-        #         ax1.plot(self.time[idx_blocks], self.ifreq_blocks[idx_blocks], "g", lw=2.0, label="Instant Freq")
-        #         ax1.plot(self.time[idx_blocks], self.mfreq_blocks[idx_blocks], "r:", lw=2.0, label="Mean Freq")
-
-        # burst_freq_power = np.array(
-        #         [self.get_arr("burst_start_time", "burst"),
-        #          self.get_arr("burst_freq_power", "burst")]
-        #         )
-        # ax1.plot(burst_freq_power[0], burst_freq_power[1], "bo", ms=10.0, alpha=0.5, label="Burst Freq Power")
-
         ax1.set_title(f"{self.sweep_index=} {title} ({len(self.events_attrs)} events)")
         ax1.set_ylabel("Amplitude")
         ax1.legend(loc='best', framealpha=0.7)
@@ -4271,3 +3708,111 @@ class EvtPro(Analyzer):
         fig.canvas.mpl_connect('close_event', on_close)
         plt.show(block=False)
         fig.canvas.draw()
+
+    @timing
+    def export_attrs_csv(
+            self,
+            file_parent: str,
+            common_name: list,
+            sweep_number: int | str,
+            attr_name: str = "events_attrs",
+            analysis_type: str = "events_consolidated",
+            key_col_name: str = "evt_time"
+            ) -> None:
+        """
+        Exports scalar attributes of any target dictionary (self.events_attrs, self.burst_attrs)
+        to a CSV file, using the outer dictionary key for the first column.
+        """
+        target_dict = getattr(self, attr_name, None)
+        if not target_dict:
+            print(f"No attributes found in 'self.{attr_name}' to export.")
+            return
+
+        # Sanitize analysis_type and format sweep_number following save_plot conventions
+        clean_type = analysis_type.replace(" - ", "_").replace(" ", "_").replace("*", "_")
+        sweep_str = f"{sweep_number:0>2}" if isinstance(sweep_number, int) else str(sweep_number)
+
+        # Construct unique file path using global make_name
+        base_name_list = common_name + [sweep_str, clean_type]
+        file_path = file_parent + make_name(base_name_list)
+
+        file_exists = os.path.isfile(file_path)
+
+        # Filter out array/list attributes using the first entry
+        sample_entry = next(iter(target_dict.values()))
+        attr_keys = [
+                k for k, v in sample_entry.items()
+                if not isinstance(v, (np.ndarray, list, tuple))
+                ]
+
+        with open(file_path, mode="a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+
+            # Write header if file does not exist yet
+            if not file_exists:
+                writer.writerow([key_col_name] + attr_keys)
+
+            # Write each row using the outer timestamp key directly
+            for outer_key, entry_dict in target_dict.items():
+                row = [outer_key]
+                for k in attr_keys:
+                    val = entry_dict.get(k, "")
+                    if isinstance(val, (bool, np.bool_)):
+                        val = str(val)
+                    row.append(val)
+                writer.writerow(row)
+    # def export_events_csv(
+    #         self,
+    #         file_parent: str,
+    #         common_name: list,
+    #         sweep_number: int | str,
+    #         analysis_type: str = "events_consolidated"
+    #         ) -> None:
+    #     """
+    #     Exports scalar attributes of all detected events in self.events_attrs to a CSV file,
+    #     constructing the output path using the standardized naming convention.
+    #
+    #     Args:
+    #         file_parent: Directory path where the file will be saved.
+    #         common_name: List of identifier strings used to construct the filename.
+    #         sweep_number: Current sweep index.
+    #         analysis_type: Label for the file type, sanitized to avoid collisions.
+    #     """
+    #     if not hasattr(self, "events_attrs") or not self.events_attrs:
+    #         print("No event attributes available to export.")
+    #         return
+    #
+    #     # Sanitize analysis_type and format sweep_number following save_plot conventions
+    #     # clean_type = name_params["analysis_type"].replace(" - ", "_").replace(" ", "_").replace("*", "_")
+    #     clean_type = analysis_type.replace(" - ", "_").replace(" ", "_").replace("*", "_")
+    #     sweep_str = f"{sweep_number:0>2}" if isinstance(sweep_number, int) else str(sweep_number)
+    #
+    #     # Construct unique file path using global make_name (which appends .csv by default)
+    #     base_name_list = common_name + [sweep_str, clean_type]
+    #     file_path = file_parent + make_name(base_name_list)
+    #
+    #     file_exists = os.path.isfile(file_path)
+    #
+    #     # Filter out array attributes (e.g., r_segm, t_segm) using the first event dictionary
+    #     sample_evt = next(iter(self.events_attrs.values()))
+    #     attr_keys = [
+    #             k for k, v in sample_evt.items()
+    #             if not isinstance(v, (np.ndarray, list, tuple)) and k != "evt_time"
+    #             ]
+    #
+    #     with open(file_path, mode="a", newline="", encoding="utf-8") as csv_file:
+    #         writer = csv.writer(csv_file)
+    #
+    #         # Write header if file does not exist yet
+    #         if not file_exists:
+    #             writer.writerow(["evt_time"] + attr_keys)
+    #
+    #         # Write each event row
+    #         for evt_time, evt_dict in self.events_attrs.items():
+    #             row = [evt_time]
+    #             for k in attr_keys:
+    #                 val = evt_dict.get(k, "")
+    #                 if isinstance(val, (bool, np.bool_)):
+    #                     val = str(val)
+    #                 row.append(val)
+    #             writer.writerow(row)

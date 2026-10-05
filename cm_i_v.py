@@ -100,7 +100,7 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
         # Initialize save list with the Voltage axis as the first column
         iv_save_list = [voltage_axis]
         avg_base_resp = np.average(base_resp_0[1], base_resp_1[1])
-        for pos, curr in enumerate(iv_iter):  # TODO make the average of the first to baseline traces
+        for pos, curr in enumerate(iv_iter):
             if pos:
                 raw_diff = curr[1] - base_resp_0[1]
             else:
@@ -122,7 +122,6 @@ def main(ori_inst: EvtPro, start: float = 0, total: float = 1800, interval: floa
             increment = 1 / (len(iv_save_list[1:]) + 1)
             j = increment
 
-            # TODO implement apply_by sectioning to the data I-V
             # actual_plot_increment = {"start": start, "end": total, "increment": const["plot_increment"]}
             # avg_ires = average_by(total_input_res, actual_plot_increment)
             plt.axvline(const["E_K"], color="k", linestyle='--')

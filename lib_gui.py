@@ -110,7 +110,7 @@ class AnalysisSelector(QWidget):
         self.location_spinbox.setValue(0)  # Default value
         # Optional: self.location_spinbox.setMaximum(99) # Set a max if needed
 
-        self.select_file_button = QPushButton("Select ABF File")
+        self.select_file_button = QPushButton("Select recording file")
         self.select_file_button.clicked.connect(self.select_file)
         self.run_analysis_button = QPushButton("Run analysis")
         self.run_analysis_button.clicked.connect(self.run_analyses)

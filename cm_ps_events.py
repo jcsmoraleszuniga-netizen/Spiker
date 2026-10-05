@@ -20,15 +20,15 @@ const: dict[str, Any] = dict(
         n_deviations_slope_rise=3.0,  # threshold deviations for derivative peaks
         n_deviations_slope_decay=1.5,  # threshold deviations for derivative peaks
 
-        rec_smoothed_width_rise=0.002,  # seconds # smooths recordings # smaller values result in noisier results
+        rec_smoothed_width_rise=0.005,  # seconds # smooths recordings # smaller values result in noisier results
         rec_sharpness_rise=8,  # Acuity of the gaussian kernel
-        rec_smoothed_width_decay=0.002,  # seconds # smooths recordings # smaller values result in noisier results
+        rec_smoothed_width_decay=0.01,  # seconds # smooths recordings # smaller values result in noisier results
         rec_sharpness_decay=8,  # Acuity of the gaussian kernel
 
-        noise_smooth_frame=0.1,  # seconds, width of the average
-        noise_sharpness=2,  # Acuity of the gaussian kernel
-        noise_smooth_frame_der=0.1,  # seconds, width of the average
-        noise_sharpness_der=2,  # Acuity of the gaussian kernel
+        noise_smooth_frame=0.05,  # seconds, width of the average
+        noise_sharpness=8,  # Acuity of the gaussian kernel
+        noise_smooth_frame_der=0.3,  # seconds, width of the average
+        noise_sharpness_der=8,  # Acuity of the gaussian kernel
 
         resp_increment=0.5,  # Minimum interval between two consecutive events necessary to calculate STD
         std_increment=10.0,  # Interval to select the minimum STD
@@ -89,7 +89,7 @@ const: dict[str, Any] = dict(
 
         burst_analysis=False,  # Activate burst_analysis?
         kernel_length=1.0,  # Length in seconds
-        min_num_ap=2,  # Minimum number of APs to consider an event a real burst
+        min_num_evt=2,  # Minimum number of events to consider an event a real burst
         corr_start=300,  # correlation template start
         corr_end=600,  # correlation template end
 
@@ -378,7 +378,7 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
     rec.get_intervals()
 
     if const["burst_analysis"]:
-        rec.burst(const["kernel_length"], const["min_num_ap"])
+        rec.find_bursts(const["kernel_length"], const["min_num_evt"])
         # rec.get_correlation(const["corr_start"], const["corr_end"])
 
     if const["show_everything"]:
@@ -389,114 +389,109 @@ def body(ori_inst: EvtPro, section: tuple[float, float]) -> EvtPro:
 
     return rec
 
+def _create_event_dict(build_const: dict) -> dict:
+    """Helper to generate a fresh event dictionary with independent zero_arrs."""
+    zero_arr = np.array([[0, 0]])
+
+    d = {
+        "Number of events": {
+                "value": zero_arr.copy(), "parameter": "amplitude",
+                "units": "#", "function": event_count},
+        "Amplitude": {
+                "value": zero_arr.copy(), "parameter": "amplitude",
+                "units": build_const["units"], "function": average_by},
+        "AUC": {
+                "value": zero_arr.copy(), "parameter": "r_auc",
+                "units": build_const["units"] + "*s", "function": average_by},
+        "Average Frequency": {
+                "value": zero_arr.copy(), "parameter": "r_auc",
+                "units": "Hz", "function": event_fr},
+        "Rise-slope value": {
+                "value": zero_arr.copy(), "parameter": "rise_slope_val",
+                "units": build_const["units"] + "/s", "function": average_by},
+        "Event baseline value": {
+                "value": zero_arr.copy(), "parameter": "b_amp",
+                "units": build_const["units"], "function": average_by},
+    }
+    if build_const["event_type"] in ["AP", "EPSP", "EPSC", "IPSP", "IPSC"]:
+        d["Instant Frequency"] = {
+                "value": zero_arr.copy(), "parameter": "r_ifreq",
+                "units": "Hz", "function": average_by}
+    if build_const["use_fit"]:
+        d.update({
+            "Tau of Fit": {
+                    "value": zero_arr.copy(), "parameter": "tau",
+                    "units": "s", "function": average_by},
+            "R of decay": {
+                    "value": zero_arr.copy(), "parameter": "pearson_r",
+                    "units": "", "function": average_by},
+            "MSE fit": {
+                    "value": zero_arr.copy(), "parameter": "mse_fit",
+                    "units": build_const["units"], "function": average_by},
+        })
+    if build_const["event_type"] == "AP":
+        d["AP threshold"] = {
+                "value": zero_arr.copy(), "parameter": "ap_threshold",
+                "units": "mV", "function": average_by}
+    return d
 
 def build_analysis_dicts(build_const: dict) -> tuple[dict, dict, dict, dict, dict]:
     """Generates fresh analysis dictionaries for a new sweep."""
-    zero_arr = np.array([[0, 0]])
-
-    def _create_event_dict():
-        """Helper to generate a fresh event dictionary with independent zero_arrs."""
-
-        d = {
-                "Count"               : {
-                        "value"   : zero_arr.copy(), "parameter": "amplitude", "units": "#",
-                        "function": event_count
-                        },
-                "Amplitude"           : {
-                        "value"   : zero_arr.copy(), "parameter": "amplitude", "units": build_const["units"],
-                        "function": average_by
-                        },
-                "AUC"                 : {
-                        "value"   : zero_arr.copy(), "parameter": "r_auc", "units": build_const["units"] + "*s",
-                        "function": average_by
-                        },
-                "Average Frequency"   : {
-                        "value": zero_arr.copy(), "parameter": "r_auc", "units": "Hz", "function": event_fr
-                        },
-                "Rise-slope value"    : {
-                        "value"   : zero_arr.copy(), "parameter": "rise_slope_val",
-                        "units"   : build_const["units"] + "/s",
-                        "function": average_by
-                        },
-                "Event baseline value": {
-                        "value"   : zero_arr.copy(), "parameter": "b_amp", "units": build_const["units"],
-                        "function": average_by
-                        },
-                }
-        if build_const["event_type"] in ["AP", "EPSP", "EPSC", "IPSP", "IPSC"]:
-            d.update(
-                    {
-                            "Instant Frequency": {
-                                    "value"   : zero_arr.copy(), "parameter": "r_ifreq", "units": "Hz",
-                                    "function": average_by
-                                    },
-                            }
-                    )
-        if build_const["use_fit"]:
-            d.update(
-                    {
-                            "Tau of Fit": {
-                                    "value": zero_arr.copy(), "parameter": "tau", "units": "s", "function": average_by
-                                    },
-                            "R of decay": {
-                                    "value"   : zero_arr.copy(), "parameter": "pearson_r", "units": "",
-                                    "function": average_by
-                                    },
-                            "MSE fit"   : {
-                                    "value"   : zero_arr.copy(), "parameter": "mse_fit", "units": build_const["units"],
-                                    "function": average_by
-                                    },
-                            }
-                    )
-        if build_const["event_type"] == "AP":
-            d.update(
-                    {
-                            "AP threshold": {
-                                    "value"   : zero_arr.copy(), "parameter": "ap_threshold", "units": "mV",
-                                    "function": average_by
-                                    },
-                            }
-                    )
-        return d
 
     # 1. Standard events
-    events_analyses = _create_event_dict()
+    events_analyses = _create_event_dict(build_const)
 
     # 2. Burst and Isolated Events (Only initialize if burst analysis is active)
-    burst_evt_analyses = _create_event_dict() if build_const["burst_analysis"] else {}
-    isolated_evt_analyses = _create_event_dict() if build_const["burst_analysis"] else {}
+    # burst_evt_analyses = _create_event_dict(build_const) if build_const["burst_analysis"] else {}
+    isolated_evt_analyses = _create_event_dict(build_const) if build_const["burst_analysis"] else {}
 
     # 3. Burst block
-    # zero_arr = np.array([[0, 0]])
+    zero_arr = np.array([[0, 0]])
     bursts_analyses = {}
     if build_const["burst_analysis"]:
         bursts_analyses = {
+                "Events amplitude": {
+                        "value": zero_arr.copy(), "parameter": "burst_evt_amp",
+                        "units": build_const["units"], "function": average_by},
+                "Events AUC": {
+                        "value": zero_arr.copy(), "parameter": "burst_evt_auc",
+                        "units": build_const["units"] + '*s', "function": average_by},
+                "Events rise slope": {
+                        "value": zero_arr.copy(), "parameter": "burst_evt_rslope",
+                        "units": build_const["units"] + '/s', "function": average_by},
                 "Intra Inst. Freq."    : {
-                        "value": zero_arr.copy(), "parameter": "burst_avg_ifreq", "units": "Hz", "function": average_by
-                        },
-                "Intra Max Freq."      : {
-                        "value": zero_arr.copy(), "parameter": "burst_max_ifreq", "units": "Hz", "function": average_by
-                        },
+                        "value": zero_arr.copy(), "parameter": "burst_avg_ifreq",
+                        "units": "Hz", "function": average_by},
+                "Intra Max. Freq."      : {
+                        "value": zero_arr.copy(), "parameter": "burst_max_ifreq",
+                        "units": "Hz", "function": average_by},
                 "Intra Mean Freq."     : {
-                        "value": zero_arr.copy(), "parameter": "burst_mean_freq", "units": "Hz", "function": average_by
-                        },
-                "Freq*Count"           : {
-                        "value": zero_arr.copy(), "parameter": "burst_freq_power", "units": "Hz", "function": average_by
-                        },
-                "Length"               : {
-                        "value": zero_arr.copy(), "parameter": "burst_length", "units": "s", "function": average_by
-                        },
+                        "value": zero_arr.copy(), "parameter": "burst_mean_freq",
+                        "units": "Hz", "function": average_by},
+                "Number of bursts": {
+                        "value": zero_arr.copy(), "parameter": "burst_length",
+                        "units": "#", "function": event_count},
+                "Number of events": {
+                        "value": zero_arr.copy(), "parameter": "burst_n_evts",
+                        "units": "#", "function": average_by},
+                "Inter Length"               : {
+                        "value": zero_arr.copy(), "parameter": "burst_length",
+                        "units": "s", "function": average_by},
                 "Inter Frequency"      : {
-                        "value": zero_arr.copy(), "parameter": "burst_length", "units": "Hz", "function": event_fr
-                        },
+                        "value": zero_arr.copy(), "parameter": "burst_length",
+                        "units": "Hz", "function": event_fr},
                 "Depolarization"       : {
-                        "value"   : zero_arr.copy(), "parameter": "burst_depolarization", "units": build_const["units"],
-                        "function": average_by
-                        },
-                "Frequency integration": {
-                        "value"   : zero_arr.copy(), "parameter": "burst_freq_integration", "units": "Hz*s",
-                        "function": average_by
-                        },
+                        "value"   : zero_arr.copy(), "parameter": "burst_depolarization",
+                        "units": build_const["units"], "function": average_by},
+                "Position integration": {
+                        "value"   : zero_arr.copy(), "parameter": "burst_pos_integration",
+                        "units": "AU", "function": average_by},
+                "Burst skewness": {
+                        "value": zero_arr.copy(), "parameter": "burst_skewness",
+                        "units": "", "function": average_by},
+                "Burst kurtosis": {
+                        "value": zero_arr.copy(), "parameter": "burst_kurtosis",
+                        "units": "", "function": average_by},
                 }
 
     # 4. Section block
@@ -504,18 +499,22 @@ def build_analysis_dicts(build_const: dict) -> tuple[dict, dict, dict, dict, dic
     if build_const["use_psnsfa"]:
         section_analyses = {
                 "Intercept"       : {
-                        "value"   : zero_arr.copy(), "parameter": "intercept", "units": build_const["units"] + "²",
-                        "function": None
-                        },
+                        "value"   : zero_arr.copy(), "parameter": "intercept",
+                        "units": build_const["units"] + "²","function": None},
                 "Unitary current" : {
-                        "value": zero_arr.copy(), "parameter": "i", "units": build_const["units"], "function": None
-                        },
-                "Channel count"   : {"value": zero_arr.copy(), "parameter": "N", "units": "", "function": None},
-                "Open probability": {"value": zero_arr.copy(), "parameter": "p_0", "units": "", "function": None},
+                        "value": zero_arr.copy(), "parameter": "i",
+                        "units": build_const["units"], "function": None},
+                "Channel count"   : {
+                        "value": zero_arr.copy(), "parameter": "N",
+                        "units": "", "function": None},
+                "Open probability": {
+                        "value": zero_arr.copy(), "parameter": "p_0",
+                        "units": "", "function": None},
                 }
 
     # Notice the updated return signature
-    return events_analyses, burst_evt_analyses, isolated_evt_analyses, bursts_analyses, section_analyses
+    # return events_analyses, burst_evt_analyses, isolated_evt_analyses, bursts_analyses, section_analyses
+    return events_analyses, isolated_evt_analyses, bursts_analyses, section_analyses
 
 
 def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600) -> None:
@@ -548,13 +547,13 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
         sweep_count = [1]
 
     for sweep_number, _ in enumerate(sweep_count):
-        # TODO if I update the const later (inside body) build_analysis_dicts maintain the default version (problem)
-        evts_anlss, burst_evt_anlss, isol_evt_anlss, bursts_anlss, section_anlss = build_analysis_dicts(const)
+        if ori_inst.mode == "sweeps":
+            ori_inst.set_resp(sweep_number)
+        # evts_anlss, burst_evt_anlss, isol_evt_anlss, bursts_anlss, section_anlss = build_analysis_dicts(const)
+        evts_anlss, isol_evt_anlss, bursts_anlss, section_anlss = build_analysis_dicts(const)
 
         for section in make_sections(start, total, interval):
             start_s, end_s = section
-            if ori_inst.mode == "sweeps":
-                ori_inst.set_resp(sweep_number)
             print(f"{section = }")
 
             # body function perform the analysis
@@ -582,20 +581,20 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                             )
                 if const["burst_analysis"]:
 
-                    # ---- NEW: Append Burst APs ----
-                    times_of_burst_evts = rec.get_arr("t_o_p", "burst_evt")
-                    if times_of_burst_evts is not None and times_of_burst_evts.size > 0:
-                        for components in burst_evt_anlss.values():
-                            components["value"] = np.append(
-                                    components["value"],
-                                    np.stack(
-                                            (times_of_burst_evts, rec.get_arr(components["parameter"], "burst_evt")),
-                                            axis=0
-                                            ).T,
-                                    axis=0
-                                    )
+                    # ---- NEW: Append Burst events ----
+                    # times_of_burst_evts = rec.get_arr("t_o_p", "burst_evt")
+                    # if times_of_burst_evts is not None and times_of_burst_evts.size > 0:
+                    #     for components in burst_evt_anlss.values():
+                    #         components["value"] = np.append(
+                    #                 components["value"],
+                    #                 np.stack(
+                    #                         (times_of_burst_evts, rec.get_arr(components["parameter"], "burst_evt")),
+                    #                         axis=0
+                    #                         ).T,
+                    #                 axis=0
+                    #                 )
 
-                    # ---- NEW: Append Isolated APs ----
+                    # ---- NEW: Append Isolated events ----
                     times_of_isolated_evts = rec.get_arr("t_o_p", "isolated_evt")
                     if times_of_isolated_evts is not None and times_of_isolated_evts.size > 0:
                         for components in isol_evt_anlss.values():
@@ -636,6 +635,31 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                                     ),
                             axis=0
                             )
+
+                # ---------------------------------------------------------
+                # CONSOLIDATED EVENT CSV EXPORT (PER SECTION)
+                # ---------------------------------------------------------
+                # Standard events
+                rec.export_attrs_csv(
+                        file_parent,
+                        common_name,
+                        sweep_number,
+                        "events_attrs",
+                        "events_consolidated",
+                        "evt_time"
+                        )
+
+                # Bursts
+                if const["burst_analysis"] and rec.burst_attrs:
+                    rec.export_attrs_csv(
+                            file_parent,
+                            common_name,
+                            sweep_number,
+                            "burst_attrs",
+                            "bursts_consolidated",
+                            "burst_time"
+                            )
+                # rec.export_events_csv(file_parent, common_name, sweep_number)
             else:
                 print("No events detected!!")
 
@@ -666,22 +690,22 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
 
         if const["burst_analysis"]:
 
-            # ---- NEW: Save/Plot Burst APs ----
-            for analysis_type, components in burst_evt_anlss.items():
-                if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
-                    components["value"] = components["value"][1:].T
-                    save_plot(
-                            components["value"],
-                            {
-                                    "file_parent"  : file_parent, "common_name": common_name,
-                                    "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
-                                    "analysis_type": f"Burst AP-{analysis_type}"  # Labeled specifically
-                                    },
-                            components["units"], actual_plot_increment, const["bins"], components["function"],
-                            const["plot"]
-                            )
+            # ---- NEW: Save/Plot Burst events ----
+            # for analysis_type, components in burst_evt_anlss.items():
+            #     if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
+            #         components["value"] = components["value"][1:].T
+            #         save_plot(
+            #                 components["value"],
+            #                 {
+            #                         "file_parent"  : file_parent, "common_name": common_name,
+            #                         "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
+            #                         "analysis_type": f"Burst event-{analysis_type}"  # Labeled specifically
+            #                         },
+            #                 components["units"], actual_plot_increment, const["bins"], components["function"],
+            #                 const["plot"]
+            #                 )
 
-            # ---- NEW: Save/Plot Isolated APs ----
+            # ---- NEW: Save/Plot Isolated events ----
             for analysis_type, components in isol_evt_anlss.items():
                 if components["value"].shape[0] > 1:  # Ensure data exists beyond zero_arr
                     components["value"] = components["value"][1:].T
@@ -690,7 +714,7 @@ def main(ori_inst, start: float = 0, total: float = 1800, interval: float = 600)
                             {
                                     "file_parent"  : file_parent, "common_name": common_name,
                                     "sweep_number" : f"{sweep_number:0>2}", "parameter": components["parameter"],
-                                    "analysis_type": f"Iso AP-{analysis_type}"  # Labeled specifically
+                                    "analysis_type": f"Isol event-{analysis_type}"  # Labeled specifically
                                     },
                             components["units"], actual_plot_increment, const["bins"], components["function"],
                             const["plot"]

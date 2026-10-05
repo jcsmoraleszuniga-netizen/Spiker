@@ -9,15 +9,13 @@ from itertools import pairwise
 from pathlib import Path
 import numpy as np
 from numba import njit
-from numpy import diff, exp, array, nanmean, std, arange, trapz, where, mean, median, \
-    percentile, \
-    delete, \
+from numpy import diff, array, nanmean, arange, trapezoid, where, percentile, delete, \
     savetxt, concatenate, ndarray, dtype, signedinteger
 from matplotlib import pyplot as plt
-from numpy._typing import _32Bit, _64Bit
+# from numpy._typing import _32Bit, _64Bit
 from scipy.ndimage import find_objects, label
 from scipy.signal import oaconvolve
-from scipy.stats import stats
+# from scipy.stats import stats
 from typing import List, Tuple, Callable, Any, Optional, Iterable
 from numpy.typing import NDArray
 from scipy import optimize
@@ -78,11 +76,6 @@ def exp_decay(t: np.ndarray, i0: float, pk0: float, t0: float) -> np.ndarray:
     I(t) = i0 + pk0 * exp(-(t - t[0]) / t0)
     """
     return i0 + pk0 * np.exp(-(t - t[0]) / t0)
-# @njit
-# def exp_decay(
-#         t: NDArray[np.floating], i0: np.floating | float, pk0: np.floating | float, t0: np.floating | float
-#         ) -> NDArray[np.floating]:
-#     return i0 + pk0 * exp(t / t0)
 
 
 # @timing
@@ -112,10 +105,11 @@ def conv_vector(n_p: int, c_type: str = 'g', sharpness: float = 2.0) -> NDArray[
     x = np.arange(n_p)
     center = (n_p - 1) / 2.0
     tau = x - center
-    # Base normalized Gaussian G(tau) used by 'g', 'd', and 't'
+    # Base normalized Gaussian G(tau) used by 'g', 'd', and 't'.
     base_g = np.exp(-0.5 * (tau / sd) ** 2)
     base_g /= np.sum(base_g)
     # --- Type-Specific Modifications ---
+    conv = None
     if c_type == 'g':
         conv = base_g
     elif c_type == 'd':
@@ -255,33 +249,6 @@ def find_peaks_and_boundaries(
 
 
 # @timing
-def get_stats(arr: NDArray[np.floating]) -> Tuple[List[str], List[Any]]:
-    try:
-        res = stats.normaltest(arr)
-        p_value = res.pvalue
-    except ValueError:
-        print("Normality test will be skipped")
-        p_value = "Undetermined"
-    name_lst = [
-            "Count", "Average", "STD", "Median", "1st percentile", "3rd percentile", "IQR", "Min", "Max",
-            "H0 normal: p-value"
-            ]
-    value_lst = [
-            len(arr),
-            mean(arr, dtype=np.float64),
-            std(arr, dtype=np.float64),
-            median(arr),
-            (q1 := percentile(arr, 25)),
-            (q3 := percentile(arr, 75)),
-            q3 - q1,
-            np.min(arr),
-            np.max(arr),
-            p_value,
-            ]
-    return name_lst, value_lst
-
-
-# @timing
 def find_outliers(arr: NDArray[np.floating]) -> ndarray[Any, dtype[signedinteger[Any] | dtype]]:
     q1: np.floating = percentile(arr, 25)
     q3: np.floating = percentile(arr, 75)
@@ -306,9 +273,9 @@ def auto_save(arr: iter, file_name='default') -> None:
 # @njit
 def differentiate(arr: NDArray[np.floating], incr: np.floating | float) -> NDArray[np.floating]:
     # np.diff is exactly f[i+1] - f[i]
-    diff = np.diff(arr) / incr
+    differ = np.diff(arr) / incr
     # Append a zero at the end to keep the array size identical and alignment correct
-    return np.append(diff, 0.0)
+    return np.append(differ, 0.0)
 
 
 # @timing
@@ -443,7 +410,7 @@ def average_by(
 
 
 # @timing
-def count_ones(arr: NDArray[np.floating]) -> int:
+def count_ones(arr: NDArray[np.floating]) -> signedinteger[Any] | dtype:
     return np.count_nonzero(arr == 1)
 
 
@@ -543,17 +510,15 @@ def save_plot(
     clean_type = name_params["analysis_type"].replace(" - ", "_").replace(" ", "_").replace("*", "_")
 
     # We add clean_type to the list to prevent EPSC_Amplitude and Burst_AP_Amplitude from colliding
-    base_name_list = name_params["common_name"] + [name_params["sweep_number"], clean_type, name_params["parameter"]]
+    base_name_list = [name_params["sweep_number"], clean_type, name_params["parameter"]]
 
-    out_name = name_params["file_parent"] + make_name(base_name_list)
     out_name_mean = name_params["file_parent"] + make_name(base_name_list + [func_name])
 
     # 3. SAVE DATA
     if callable(func):
-        auto_save(values.T, out_name)
         auto_save(func_values.T, out_name_mean)
     else:
-        auto_save(values.T, out_name)
+        print(f"No CSV file will be saved!")
 
     # ---------------------------------------------------------
     # CRITICAL FIX 2: NaN-Safe Stats Calculation
@@ -574,7 +539,7 @@ def save_plot(
 
         # Create a single figure with 1 row, 2 columns.
         # Adjusted figsize to standard 16:9-ish proportion for split pane.
-        fig, (ax_hist, ax_time) = plt.subplots(1, 2, figsize=(6, 2))
+        fig, (ax_hist, ax_time) = plt.subplots(1, 2, figsize=(4, 2))
 
         # ---------------------------------------------------------
         # LEFT PLOT: Histogram
@@ -620,7 +585,7 @@ def save_plot(
         # ---------------------------------------------------------
         # SAVE FIGURE TO DISK
         # ---------------------------------------------------------
-        out_image_name = f"{out_name}.png"
+        out_image_name = f"{out_name_mean}.png"
         fig.savefig(out_image_name, dpi=300, bbox_inches='tight')
 
         # Hook the closing event, and show
@@ -629,7 +594,7 @@ def save_plot(
 
 
 def get_safe_filename(text: str) -> str:
-    """Removes illegal characters from a string so it can be a Windows/Mac filename."""
+    """Removes illegal characters from a string, so it can be a Windows/Mac filename."""
     if not text:
         return ""
     # Replaces < > : " / \ | ? * with an underscore
@@ -724,6 +689,76 @@ def smoothing(resp, points, sharpness=4, c_type='g', fs=1):
     return result[pad_len:-pad_len], kernel_sd
 
 
+# def adaptive_smoothing(
+#         resp, max_points, sharpness=8, c_type="g",
+#         fs=1, max_slope=10000, smooth_points=10,
+#         ):
+#     """
+#     Smooths an array dynamically by blending minimal and broad smoothing based on
+#     the local rate of change calculated with `differentiate` and `smoothing`.
+#     """
+#     dt = 1.0 / fs
+#     # 1. Derivative using your custom differentiate function
+#     slope_clean = differentiate(resp, dt)
+#     slope_clean = np.abs(slope_clean)
+#     slope_clean, _ = smoothing(
+#             slope_clean, smooth_points, sharpness=sharpness, c_type=c_type, fs=fs
+#             )
+#     # 2. Constructs the weights using the absolute slope magnitudes
+#     # c controls curvature: higher c = flatter top near 1.0, steeper drop near 0
+#     c = 0.001
+#     min_slope = np.min(slope_clean)  # Baseline noise floor (lowest slope in trace)
+#     # Scale slope from [min_slope, max_slope] to [0.0, 1.0]
+#     x = np.clip((slope_clean - min_slope) / (max_slope - min_slope), 0.0, 1.0)
+#     # w -> 0 when slope ~ 0 (broad smoothing)
+#     # w -> 1 when slope is high (minimal smoothing)
+#     weight = np.log1p(c * x) / np.log1p(c)
+#     # Maximum smooth recording.
+#     smooth_max, _ = smoothing(resp, max_points, sharpness=sharpness, c_type=c_type, fs=fs)
+#     # 3. Blend responses based on local rate of change
+#     adaptive_result = (weight * resp) + ((1.0 - weight) * smooth_max)
+#     return adaptive_result, weight
+
+
+def adaptive_smoothing(
+        resp, max_points, sharpness=8, c_type="g",
+        fs=1, max_slope=10000, min_slope=100, smooth_points=10,
+        ):
+    """
+    Smooths an array dynamically by blending minimal and broad smoothing based on
+    the local rate of change calculated with `differentiate` and `smoothing`.
+    """
+    dt = 1.0 / fs
+    # 1. Derivative using your custom differentiate function
+    slope_clean = differentiate(resp, dt)
+    slope_clean = np.abs(slope_clean)
+    slope_clean, _ = smoothing(
+            slope_clean, smooth_points, sharpness=sharpness, c_type=c_type, fs=fs
+            )
+    # ---------------------------------------------------------
+    # 2. CONSTRUCT WEIGHTS FROM ABSOLUTE SLOPE MAGNITUDES
+    # ---------------------------------------------------------
+    c = 0.1
+    # 1. Scale slope into x:
+    # - Below min_slope -> 0.0
+    # - Above max_slope -> 1.0
+    # - Between min_slope and max_slope -> linear (0.0, 1.0)
+    slope_range = max(float(max_slope - min_slope), 1e-12)
+    x = np.clip((slope_clean - min_slope) / slope_range, 0.0, 1.0)
+
+    # 2. Non-linear log-mapping:
+    # - slope <= min_slope -> x = 0.0 -> weight = 0.0
+    # - slope >= max_slope -> x = 1.0 -> weight = 1.0
+    # - min_slope < slope < max_slope -> weight follows the log equation
+    weight = np.clip(np.log1p(c * x) / np.log1p(c), 0.0, 1.0)
+    # Maximum smooth recording.
+    smooth_max, _ = smoothing(resp, max_points, sharpness=sharpness, c_type=c_type, fs=fs)
+    # 3. Blend responses based on local rate of change
+    adaptive_result = (weight * resp) + ((1.0 - weight) * smooth_max)
+
+    return adaptive_result, weight
+
+
 def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) -> np.ndarray:
     """Returns a new array of zeros with specific indices set to a value."""
     # Create a completely new array with the same shape and type as the input
@@ -736,14 +771,14 @@ def reset_array(arr: np.ndarray, point: int | np.ndarray, value: float = 1.0) ->
 
 
 # @timing
-def split_position(arr: np.ndarray, direction: int) -> signedinteger[_32Bit | _64Bit] | None:
-    match direction:
-        case -1:
-            return np.argmin(arr)
-        case 1:
-            return np.argmax(arr)
-        case _:
-            return None
+# def split_position(arr: np.ndarray, direction: int) -> signedinteger[_32Bit | _64Bit] | None:
+#     match direction:
+#         case -1:
+#             return np.argmin(arr)
+#         case 1:
+#             return np.argmax(arr)
+#         case _:
+#             return None
 
 
 # @timing
@@ -810,8 +845,7 @@ def file_info(path_to_file, parameter):
 
 # @timing
 def calculate_area(resp_time, resp):
-    # return integrate.simpson(resp, resp_time)
-    return trapz(resp, resp_time)
+    return trapezoid(resp, resp_time)
 
 
 # @timing
@@ -847,6 +881,8 @@ def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
     y_safe = np.where(valid_mask, y, np.nan)
 
     return np.log(y_safe)
+
+
 # @njit
 # def exp_to_lin(arr: np.ndarray, direction: int) -> np.ndarray:
 #     """Transforms an exponential decay curve to a linear curve.
@@ -925,6 +961,8 @@ def lin_fit(y_var, x_var):
         pearson_r = r_num / r_den
 
     return slope, intercept, pearson_r, 0.0, 0.0, 0.0
+
+
 # @njit
 # def lin_fit(y_var, x_var):
 #     """
@@ -1016,6 +1054,8 @@ def exp_fit(response: np.ndarray, time: np.ndarray, direction: int):
     fit_i_0 = 0.0
 
     return fit_i_0, fit_pk0, fit_t0, pearson_r
+
+
 # @njit
 # def exp_fit(response: np.ndarray, time: np.ndarray, direction: int):
 #     """Fits data to an exponential decay: I(t) = pk0 * exp(-t / t0).
@@ -1217,4 +1257,3 @@ def sort_vectors_by_first(vec_primary: NDArray, vec_secondary: NDArray) -> tuple
     sorted_secondary = vec_secondary[sort_indices]
 
     return sorted_primary, sorted_secondary
-
